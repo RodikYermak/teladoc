@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+*.egg-info/
+*.egg
+
+# Virtual environments
+env/
+venv/
+
+# Docker
+*.log
+*.pid
+*.sock
+
+# Env files
+.env
+
+# MacOS
+.DS_Store
+
+# Git
+.git/
