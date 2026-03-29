@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Tenant Dashboard</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                background-color: #fff;
+                color: #1c1c1c;
+            }
+
+            header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 20px 40px;
+                border-bottom: 1px solid #e0e0e0;
+            }
+
+            .logo {
+                font-size: 24px;
+                font-weight: bold;
+                color: #3d3d3d;
+            }
+
+            .logo span {
+                color: #00c4cc;
+            }
+
+            .nav-links {
+                display: flex;
+                align-items: center;
+                gap: 20px;
+                font-size: 14px;
+            }
+
+            .nav-links a {
+                text-decoration: none;
+                color: #6a2bff;
+            }
+
+            .avatar {
+                width: 36px;
+                height: 36px;
+                background-color: #00c4cc;
+                border-radius: 50%;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                color: white;
+                font-weight: bold;
+                font-size: 16px;
+            }
+
+            main {
+                padding: 40px;
+            }
+
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }
+
+            th,
+            td {
+                text-align: left;
+                padding: 12px 16px;
+                border-bottom: 1px solid #e0e0e0;
+            }
+
+            th {
+                font-weight: 600;
+                color: #333;
+            }
+
+            td button {
+                padding: 6px 12px;
+                border: 1px solid #6a2bff;
+                background: none;
+                color: #6a2bff;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            }
+
+            td button:hover {
+                background-color: #f5f0ff;
+            }
+
+            td:last-child {
+                text-align: right;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="logo">Teladoc <span>HEALTH</span></div>
+            <div class="nav-links">
+                <span>Tenant Dashboard</span>
+                <a href="#">Admin View</a>
+                <div class="avatar">A</div>
+            </div>
+        </header>
+
+        <main>
+            <table>
+                <thead>
+                    <tr>
+                        <th>TENANT</th>
+                        <th>QUOTA</th>
+                        <th>USED</th>
+                        <th>LAST ACTIVITY</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>tenant@email.com</td>
+                        <td>1,000,000</td>
+                        <td>80</td>
+                        <td>Tokens processed</td>
+                        <td><button>Edit</button></td>
+                    </tr>
+                    <tr>
+                        <td>tenant@email.com</td>
+                        <td>1,200,000</td>
+                        <td>220,000</td>
+                        <td>Inference seconds</td>
+                        <td><button>Edit</button></td>
+                    </tr>
+                    <tr>
+                        <td>tenant@email.com</td>
+                        <td>1,500,000</td>
+                        <td>70,000</td>
+                        <td>Requests</td>
+                        <td><button>Edit</button></td>
+                    </tr>
+                    <tr>
+                        <td>tenant@email.com</td>
+                        <td>100,000</td>
+                        <td>1,200</td>
+                        <td>Tokens processed</td>
+                        <td><button>Edit</button></td>
+                    </tr>
+                    <tr>
+                        <td>tenant@email.com</td>
+                        <td>500</td>
+                        <td>300</td>
+                        <td>Tokens processed</td>
+                        <td><button>Edit</button></td>
+                    </tr>
+                </tbody>
+            </table>
+        </main>
+    </body>
+</html>
