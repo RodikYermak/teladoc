@@ -1,48 +1,73 @@
 from fastapi import FastAPI
-from os import environ as env
+from app.routes.issues import router as issues_router
+from app.middleware.timer import timing_middleware
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-tenants = [
-    {"email": "1@user.com", "monthly_quota": 1000, "month_to_date_usage": 500, "last_activity_time": "9:00am"},
-    {"email": "2@user.com", "monthly_quota": 2000, "month_to_date_usage": 1500, "last_activity_time": "8:00am"},
-    {"email": "3@user.com", "monthly_quota": 3000, "month_to_date_usage": 1500, "last_activity_time": "11:00am"},
-    {"email": "4@user.com", "monthly_quota": 4000, "month_to_date_usage": 2500, "last_activity_time": "1:00am"},
-    {"email": "5@user.com", "monthly_quota": 5000, "month_to_date_usage": 3500, "last_activity_time": "4:00am"},
-]
+app.middleware("http")(timing_middleware)
 
-events = []
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/")
-def index():
-    secret = env.get("MY_VARIABLE", "not_set")
-    return {"details": f"Hello, World! Secret = {secret}"}
-
-@app.get("/v1/tenants")
-def get_tenants():
-    return tenants
-
-@app.get("/v1/tenants/{tenant_id}")
-def get_tenant_usage(tenant_id: str):
-    for tenant in tenants:
-        if tenant["email"] == tenant_id:
-            return tenant
-    return {"error": "Item not found"}
+app.include_router(issues_router)
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
-@app.get("/ready")
-def readiness_check():
-    return {"status": "ok"}
 
 
-@app.post("/v1/usage/events")
-def create_event_for_tenant(event: dict):
-    events.append(event)
-    return event
+
+
+
+# from fastapi import FastAPI
+# from os import environ as env
+
+# app = FastAPI()
+
+# tenants = [
+#     {"email": "1@user.com", "monthly_quota": 1000, "month_to_date_usage": 500, "last_activity_time": "9:00am"},
+#     {"email": "2@user.com", "monthly_quota": 2000, "month_to_date_usage": 1500, "last_activity_time": "8:00am"},
+#     {"email": "3@user.com", "monthly_quota": 3000, "month_to_date_usage": 1500, "last_activity_time": "11:00am"},
+#     {"email": "4@user.com", "monthly_quota": 4000, "month_to_date_usage": 2500, "last_activity_time": "1:00am"},
+#     {"email": "5@user.com", "monthly_quota": 5000, "month_to_date_usage": 3500, "last_activity_time": "4:00am"},
+# ]
+
+# events = []
+
+# @app.get("/")
+# def index():
+#     secret = env.get("MY_VARIABLE", "not_set")
+#     return {"details": f"Hello, World! Secret = {secret}"}
+
+# @app.get("/v1/tenants")
+# def get_tenants():
+#     return tenants
+
+# @app.get("/v1/tenants/{tenant_id}")
+# def get_tenant_usage(tenant_id: str):
+#     for tenant in tenants:
+#         if tenant["email"] == tenant_id:
+#             return tenant
+#     return {"error": "Item not found"}
+
+
+# @app.get("/health")
+# def health_check():
+#     return {"status": "ok"}
+
+# @app.get("/ready")
+# def readiness_check():
+#     return {"status": "ok"}
+
+
+# @app.post("/v1/usage/events")
+# def create_event_for_tenant(event: dict):
+#     events.append(event)
+#     return event
 
 
 # """
