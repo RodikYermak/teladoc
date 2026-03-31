@@ -5,31 +5,35 @@ import api from '../api';
 const FruitList = () => {
     const [fruits, setFruits] = useState([]);
 
-    const fetchFruits = async () => {
-        try {
-            const response = await api.get('/fruits');
-            setFruits(response.data.fruits);
-        } catch (error) {
-            console.error('Error fetching fruits', error);
-        }
-    };
+    // Fetch fruits from the API
+    useEffect(() => {
+        const fetchFruits = async () => {
+            try {
+                const response = await api.get('/fruits');
+                setFruits(response.data.fruits); // Safe async state update
+            } catch (error) {
+                console.error('Error fetching fruits', error);
+            }
+        };
 
+        fetchFruits();
+    }, []); // Run once on mount
+
+    // Add a new fruit and refresh the list
     const addFruit = async (fruitName) => {
         try {
             await api.post('/fruits', { name: fruitName });
-            fetchFruits(); // Refresh the list after adding a fruit
+            // Refetch after adding
+            const response = await api.get('/fruits');
+            setFruits(response.data.fruits);
         } catch (error) {
             console.error('Error adding fruit', error);
         }
     };
 
-    useEffect(() => {
-        fetchFruits();
-    }, []);
-
     return (
         <div>
-            <h2>Events List</h2>
+            <h2>Fruits List</h2>
             <ul>
                 {fruits.map((fruit, index) => (
                     <li key={index}>{fruit.name}</li>
