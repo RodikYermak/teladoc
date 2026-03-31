@@ -1,15 +1,31 @@
 import React, { useState } from 'react';
 
-const tenantsData = [
-    { email: 'tenant@email.com', quota: 1000000, used: 80, lastActivity: 'Tokens processed' },
-    { email: 'tenant@email.com', quota: 1200000, used: 220000, lastActivity: 'Inference seconds' },
-    { email: 'tenant@email.com', quota: 1500000, used: 70000, lastActivity: 'Requests' },
-    { email: 'tenant@email.com', quota: 100000, used: 1200, lastActivity: 'Tokens processed' },
-    { email: 'tenant@email.com', quota: 500, used: 300, lastActivity: 'Tokens processed' },
+const initialTenants = [
+    {
+        id: 1,
+        email: 'tenant1@email.com',
+        quota: 1000000,
+        used: 800000,
+        lastActivity: 'Tokens processed',
+    },
+    {
+        id: 2,
+        email: 'tenant2@email.com',
+        quota: 1200000,
+        used: 220000,
+        lastActivity: 'Inference seconds',
+    },
+    {
+        id: 3,
+        email: 'tenant3@email.com',
+        quota: 1500000,
+        used: 70000,
+        lastActivity: 'Tokens processed',
+    },
 ];
 
 export default function AdminPage() {
-    const [tenants, setTenants] = useState(tenantsData);
+    const [tenants, setTenants] = useState(initialTenants);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentTenant, setCurrentTenant] = useState(null);
     const [newQuota, setNewQuota] = useState('');
@@ -17,7 +33,7 @@ export default function AdminPage() {
 
     const openModal = (tenant) => {
         setCurrentTenant(tenant);
-        setNewQuota(tenant.quota);
+        setNewQuota(String(tenant.quota));
         setReason('');
         setIsModalOpen(true);
     };
@@ -25,40 +41,45 @@ export default function AdminPage() {
     const closeModal = () => {
         setIsModalOpen(false);
         setCurrentTenant(null);
+        setNewQuota('');
+        setReason('');
     };
 
     const updateTenant = () => {
-        if (!currentTenant) return;
+        if (!currentTenant || !newQuota || !reason.trim()) return;
 
         setTenants((prev) =>
-            prev.map((t) =>
-                t.email === currentTenant.email ? { ...t, quota: Number(newQuota) } : t,
+            prev.map((tenant) =>
+                tenant.id === currentTenant.id ? { ...tenant, quota: Number(newQuota) } : tenant,
             ),
         );
+
         closeModal();
     };
 
     return (
-        <div style={{ padding: '40px' }}>
-            <table>
+        <div className="admin-page">
+            <h2>Admin View</h2>
+
+            <table className="tenant-table">
                 <thead>
                     <tr>
-                        <th>TENANT</th>
-                        <th>QUOTA</th>
-                        <th>USED</th>
-                        <th>LAST ACTIVITY</th>
+                        <th>Tenant</th>
+                        <th>Quota</th>
+                        <th>Used</th>
+                        <th>Last Activity</th>
                         <th></th>
                     </tr>
                 </thead>
                 <tbody>
-                    {tenants.map((t, idx) => (
-                        <tr key={idx}>
-                            <td>{t.email}</td>
-                            <td>{t.quota.toLocaleString()}</td>
-                            <td>{t.used.toLocaleString()}</td>
-                            <td>{t.lastActivity}</td>
+                    {tenants.map((tenant) => (
+                        <tr key={tenant.id}>
+                            <td>{tenant.email}</td>
+                            <td>{tenant.quota.toLocaleString()}</td>
+                            <td>{tenant.used.toLocaleString()}</td>
+                            <td>{tenant.lastActivity}</td>
                             <td>
-                                <button className="edit-btn" onClick={() => openModal(t)}>
+                                <button className="edit-btn" onClick={() => openModal(tenant)}>
                                     Edit
                                 </button>
                             </td>
@@ -67,11 +88,10 @@ export default function AdminPage() {
                 </tbody>
             </table>
 
-            {/* Modal */}
-            {isModalOpen && (
+            {isModalOpen && currentTenant && (
                 <div className="overlay">
                     <div className="modal">
-                        <h2>Edit Quota</h2>
+                        <h3>Edit Quota</h3>
 
                         <div className="field">
                             <label>Tenant</label>
@@ -80,11 +100,7 @@ export default function AdminPage() {
 
                         <div className="field">
                             <label>Current Quota</label>
-                            <input
-                                type="text"
-                                value={currentTenant.quota.toLocaleString()}
-                                readOnly
-                            />
+                            <input type="text" value={currentTenant.quota} readOnly />
                         </div>
 
                         <div className="field">
@@ -100,8 +116,8 @@ export default function AdminPage() {
                             <label>Reason</label>
                             <input
                                 type="text"
-                                placeholder="up to 8 characters"
-                                maxLength={8}
+                                placeholder="Reason for change"
+                                maxLength={100}
                                 value={reason}
                                 onChange={(e) => setReason(e.target.value)}
                             />

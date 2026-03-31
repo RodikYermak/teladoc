@@ -31,26 +31,87 @@
 # # https://teladoc-poug.onrender.com/api/v1/issues/
 
 
+# import uvicorn
+# from fastapi import FastAPI
+# from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel, Field
+# from typing import List
+# from uuid import UUID, uuid4
+# from datetime import datetime
+
+# # Event schema
+# class Event(BaseModel):
+#     event_id: UUID = Field(default_factory=uuid4)
+#     tenant_id: UUID
+#     type: str  # "tokens" or "inference_seconds"
+#     amount: int
+#     timestamp: datetime
+
+# class Events(BaseModel):
+#     events: List[Event]
+
+# app = FastAPI(debug=True)
+
+# origins = [
+#     "http://localhost:5173",
+# ]
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+# # In-memory DB
+# memory_db = {"events": []}
+
+# @app.get("/events", response_model=Events)
+# def get_events():
+#     return Events(events=memory_db["events"])
+
+# @app.post("/events", response_model=Event)
+# def add_event(event: Event):
+#     # Only use tenant_id, type, amount from client
+#     new_event = Event(
+#         tenant_id=event.tenant_id,
+#         type=event.type,
+#         amount=event.amount
+#     )
+#     memory_db["events"].append(new_event)
+#     return new_event
+
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Literal
+from uuid import UUID, uuid4
+from datetime import datetime, timezone
 
+class EventCreate(BaseModel):
+    tenant_id: UUID
+    type: Literal["tokens", "inference_seconds"]
+    amount: int
 
-class Fruit(BaseModel):
-    name: str
+class Event(BaseModel):
+    event_id: UUID = Field(default_factory=uuid4)
+    tenant_id: UUID
+    type: Literal["tokens", "inference_seconds"]
+    amount: int
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-
-class Fruits(BaseModel):
-    fruits: List[Fruit]
-
+class Events(BaseModel):
+    events: List[Event]
 
 app = FastAPI(debug=True)
 
 origins = [
     "http://localhost:5173",
-    # Add more origins here
 ]
 
 app.add_middleware(
@@ -61,18 +122,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-memory_db = {"fruits": []}
+memory_db = {"events": []}
 
-@app.get("/fruits", response_model=Fruits)
-def get_fruits():
-    return Fruits(fruits=memory_db["fruits"])
+@app.get("/events", response_model=Events)
+def get_events():
+    return {"events": memory_db["events"]}
 
-
-@app.post("/fruits")
-def add_fruit(fruit: Fruit):
-    memory_db["fruits"].append(fruit)
-    return fruit
-
+@app.post("/events", response_model=Event)
+def add_event(event: EventCreate):
+    new_event = Event(
+        tenant_id=event.tenant_id,
+        type=event.type,
+        amount=event.amount,
+    )
+    memory_db["events"].append(new_event)
+    return new_event
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
