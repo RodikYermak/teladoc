@@ -1,6 +1,9 @@
 from fastapi import FastAPI
+
 from app.routes.issues import router as issues_router
 from app.routes.auth import router as auth_router
+from app.routes.health import router as health_router
+
 from app.middleware.timer import timing_middleware
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,6 +25,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(issues_router)
+app.include_router(health_router)
 
 
 # https://teladoc-poug.onrender.com/api/v1/issues/
