@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 
 export default function EventForm({ onSubmit }) {
     const [tenantId, setTenantId] = useState('');
-    const [type, setType] = useState('tokens');
+    const [eventType, setEventType] = useState('tokens');
     const [amount, setAmount] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
@@ -16,12 +16,12 @@ export default function EventForm({ onSubmit }) {
         try {
             await onSubmit({
                 tenant_id: tenantId,
-                type,
+                event_type: eventType,
                 amount: Number(amount),
             });
 
             setTenantId('');
-            setType('tokens');
+            setEventType('tokens');
             setAmount('');
         } catch (error) {
             console.error(error);
@@ -42,7 +42,7 @@ export default function EventForm({ onSubmit }) {
                 onChange={(e) => setTenantId(e.target.value)}
             />
 
-            <select value={type} onChange={(e) => setType(e.target.value)}>
+            <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
                 <option value="tokens">tokens</option>
                 <option value="inference_seconds">inference_seconds</option>
             </select>

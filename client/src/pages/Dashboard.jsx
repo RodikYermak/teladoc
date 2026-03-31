@@ -12,7 +12,7 @@ export default function Dashboard() {
 
     const fetchEvents = async () => {
         try {
-            const response = await api.get('/events');
+            const response = await api.get('/v1/usage/events');
             setEvents(response.data.events);
         } catch (error) {
             console.error('Error fetching events:', error);
@@ -27,17 +27,17 @@ export default function Dashboard() {
 
     const handleCreateEvent = async (payload) => {
         try {
-            const response = await api.post('/events', payload);
+            const response = await api.post('/v1/usage/events', payload);
             setEvents((prev) => [response.data, ...prev]);
         } catch (error) {
-            console.error('Error creating event:', error);
+            console.error('Error creating event:', error.response?.data || error);
             throw error;
         }
     };
 
     const tokenUsed = useMemo(() => {
         return events
-            .filter((event) => event.type === 'tokens')
+            .filter((event) => event.event_type === 'tokens')
             .reduce((sum, event) => sum + event.amount, 0);
     }, [events]);
 

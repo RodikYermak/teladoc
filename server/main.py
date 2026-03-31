@@ -93,20 +93,28 @@ from typing import List, Literal
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
+
+# ----------- Models -----------
+
 class EventCreate(BaseModel):
     tenant_id: UUID
-    type: Literal["tokens", "inference_seconds"]
-    amount: int
+    event_type: Literal["tokens", "inference_seconds"]
+    amount: int = Field(gt=0)
+
 
 class Event(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     tenant_id: UUID
-    type: Literal["tokens", "inference_seconds"]
+    event_type: Literal["tokens", "inference_seconds"]
     amount: int
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class Events(BaseModel):
+
+class EventsResponse(BaseModel):
     events: List[Event]
+
+
+# ----------- App Setup -----------
 
 app = FastAPI(debug=True)
 
@@ -122,21 +130,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# In-memory storage (resets on restart)
 memory_db = {"events": []}
 
-@app.get("/events", response_model=Events)
+
+# ----------- Legacy Endpoints (optional) -----------
+
+@app.get("/events", response_model=EventsResponse)
 def get_events():
     return {"events": memory_db["events"]}
+
 
 @app.post("/events", response_model=Event)
 def add_event(event: EventCreate):
     new_event = Event(
         tenant_id=event.tenant_id,
-        type=event.type,
+        event_type=event.event_type,
         amount=event.amount,
     )
     memory_db["events"].append(new_event)
     return new_event
+
+
+# ----------- New v1 API -----------
+
+@app.post("/v1/usage/events", response_model=Event, status_code=201)
+def create_usage_event(event: EventCreate):
+    """
+    Record a usage event for a tenant.
+    """
+    new_event = Event(
+        tenant_id=event.tenant_id,
+        event_type=event.event_type,
+        amount=event.amount,
+    )
+
+    memory_db["events"].append(new_event)
+
+    print("Current events:", memory_db["events"])  # debug log
+
+    return new_event
+
+
+@app.get("/v1/usage/events", response_model=EventsResponse)
+def list_usage_events():
+    """
+    List all usage events (simple version).
+    """
+    return {"events": memory_db["events"]}
+
+
+# ----------- Run Server -----------
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

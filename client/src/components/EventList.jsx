@@ -14,7 +14,7 @@ export default function EventList({ events }) {
             {events.map((event) => (
                 <div className="event-item" key={event.event_id}>
                     <div>
-                        <strong>{event.type}</strong> — {event.amount.toLocaleString()}
+                        <strong>{event.event_type}</strong> — {event.amount.toLocaleString()}
                     </div>
                     <div className="event-meta">Tenant: {event.tenant_id}</div>
                     <div className="event-meta">{formatTimestamp(event.timestamp)}</div>
