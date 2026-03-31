@@ -29,7 +29,7 @@ const FruitList = () => {
 
     return (
         <div>
-            <h2>Fruits List</h2>
+            <h2>Events List</h2>
             <ul>
                 {fruits.map((fruit, index) => (
                     <li key={index}>{fruit.name}</li>
