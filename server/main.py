@@ -213,10 +213,21 @@ def require_admin(x_admin: Optional[str]) -> str:
     return "admin@example.com"
 
 
+def is_admin(x_admin: Optional[str]) -> bool:
+    return x_admin == "true"
+
+
 def find_tenant_index(tenant_id: UUID) -> int:
     for idx, tenant in enumerate(memory_db["tenants"]):
         if tenant.tenant_id == tenant_id:
             return idx
+    raise HTTPException(status_code=404, detail="Tenant not found")
+
+
+def get_tenant_record(tenant_id: UUID) -> TenantRecord:
+    for tenant in memory_db["tenants"]:
+        if tenant.tenant_id == tenant_id:
+            return tenant
     raise HTTPException(status_code=404, detail="Tenant not found")
 
 
@@ -262,6 +273,24 @@ def check_db_connectivity() -> dict:
     }
 
 
+def get_month_start(dt: datetime) -> datetime:
+    dt_utc = dt.astimezone(timezone.utc)
+    return datetime(dt_utc.year, dt_utc.month, 1, tzinfo=timezone.utc)
+
+
+def get_month_to_date_token_usage(tenant_id: UUID, as_of: Optional[datetime] = None) -> int:
+    now = as_of or datetime.now(timezone.utc)
+    month_start = get_month_start(now)
+
+    return sum(
+        event.amount
+        for event in memory_db["events"]
+        if event.tenant_id == tenant_id
+        and event.event_type == "tokens"
+        and month_start <= event.timestamp <= now
+    )
+
+
 @app.get("/health")
 def health():
     return {
@@ -290,7 +319,12 @@ def list_usage_events():
 
 
 @app.post("/v1/usage/events", response_model=Event)
-def create_usage_event(event: EventCreate, response: Response):
+def create_usage_event(
+    event: EventCreate,
+    response: Response,
+    allow_overage: bool = Query(False),
+    x_admin: Optional[str] = Header(default=None),
+):
     ensure_tenant_exists(event.tenant_id)
 
     idempotency_key = (str(event.tenant_id), event.idempotency_key)
@@ -321,6 +355,32 @@ def create_usage_event(event: EventCreate, response: Response):
             timestamp=stored_event.timestamp,
             idempotency_replayed=True,
         )
+
+    tenant = get_tenant_record(event.tenant_id)
+
+    # Quota enforcement only applies to token usage, since quota is token-based.
+    if event.event_type == "tokens":
+        month_to_date_usage = get_month_to_date_token_usage(event.tenant_id)
+        projected_usage = month_to_date_usage + event.amount
+        remaining_units = max(tenant.configured_monthly_quota - month_to_date_usage, 0)
+
+        over_quota = projected_usage > tenant.configured_monthly_quota
+        admin_override = allow_overage and is_admin(x_admin)
+
+        if over_quota and not admin_override:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "quota_exceeded",
+                    "message": "Event would exceed tenant monthly quota",
+                    "tenant_id": str(event.tenant_id),
+                    "configured_monthly_quota": tenant.configured_monthly_quota,
+                    "month_to_date_usage": month_to_date_usage,
+                    "requested_units": event.amount,
+                    "remaining_units": remaining_units,
+                    "allow_overage_available_for_admin": True,
+                },
+            )
 
     new_event = Event(
         tenant_id=event.tenant_id,

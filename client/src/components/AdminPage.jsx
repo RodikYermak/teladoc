@@ -51,10 +51,12 @@ export default function AdminPage() {
 
     const updateTenant = async () => {
         if (!currentTenant) return;
+
         if (!newQuota || Number(newQuota) <= 0) {
             alert('Please enter a valid quota.');
             return;
         }
+
         if (!reason.trim()) {
             alert('Please provide a reason.');
             return;
@@ -63,7 +65,7 @@ export default function AdminPage() {
         try {
             setUpdating(true);
 
-            const response = await api.put(
+            await api.put(
                 `/v1/tenants/${currentTenant.tenant_id}/quota`,
                 {
                     new_monthly_quota: Number(newQuota),
@@ -76,19 +78,7 @@ export default function AdminPage() {
                 },
             );
 
-            const updatedQuota = response.data.configured_monthly_quota;
-
-            setTenants((prev) =>
-                prev.map((tenant) =>
-                    tenant.tenant_id === currentTenant.tenant_id
-                        ? {
-                              ...tenant,
-                              configured_monthly_quota: updatedQuota,
-                          }
-                        : tenant,
-                ),
-            );
-
+            await fetchTenants();
             closeModal();
         } catch (err) {
             console.error('Error updating tenant quota:', err.response?.data || err);
@@ -110,7 +100,18 @@ export default function AdminPage() {
     if (error) {
         return (
             <div className="admin-page">
-                <h2>Admin View</h2>
+                <div
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '16px',
+                    }}>
+                    <h2>Admin View</h2>
+                    <button className="edit-btn" onClick={fetchTenants}>
+                        Refresh
+                    </button>
+                </div>
                 <p>{error}</p>
             </div>
         );
@@ -118,7 +119,18 @@ export default function AdminPage() {
 
     return (
         <div className="admin-page">
-            <h2>Admin View</h2>
+            <div
+                style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '16px',
+                }}>
+                <h2>Admin View</h2>
+                <button className="edit-btn" onClick={fetchTenants}>
+                    Refresh
+                </button>
+            </div>
 
             {!tenants.length ? (
                 <p>No tenants found.</p>
