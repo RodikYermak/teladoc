@@ -55,10 +55,6 @@ function formatTime(value) {
     });
 }
 
-function formatTimestamp(timestamp) {
-    return new Date(timestamp).toLocaleString();
-}
-
 function generateIdempotencyKey() {
     return crypto.randomUUID();
 }
@@ -99,6 +95,7 @@ function ProtectedRoute({ isAuthenticated, children }) {
 
 function Header({ auth, onLogout }) {
     const location = useLocation();
+    const isAdmin = auth?.user?.role === 'admin';
 
     return (
         <header className="app-header-wrap">
@@ -113,12 +110,23 @@ function Header({ auth, onLogout }) {
                         className={location.pathname === '/' ? 'nav-link active' : 'nav-link'}>
                         Tenant Dashboard
                     </Link>
-                    <Link
-                        to="/admin"
-                        className={location.pathname === '/admin' ? 'nav-link active' : 'nav-link'}>
-                        Admin View
-                    </Link>
+
+                    {isAdmin ? (
+                        <Link
+                            to="/admin"
+                            className={
+                                location.pathname === '/admin' ? 'nav-link active' : 'nav-link'
+                            }>
+                            Admin View
+                        </Link>
+                    ) : (
+                        <span className="nav-link nav-link-disabled" title="Admin only">
+                            Admin View
+                        </span>
+                    )}
+
                     <div className="profile">{auth?.user?.displayName?.[0] || 'A'}</div>
+
                     <button className="logout-btn" onClick={onLogout}>
                         Log out
                     </button>
@@ -239,27 +247,40 @@ function LoginPage({ onLogin }) {
 }
 
 function TokenCard({ used, total }) {
-    const percent = total > 0 ? Math.min((used / total) * 100, 100) : 0;
-    const isWarning = total > 0 && used / total >= 0.8;
+    const percentRaw = total > 0 ? (used / total) * 100 : 0;
+    const percent = total > 0 ? Math.min(percentRaw, 100) : 0;
+
+    const isOver = total > 0 && used > total;
+    const isWarning = total > 0 && used / total > 0.9 && !isOver;
+
+    let statusText = 'Month-to-date usage';
+    let statusClassName = 'usage-caption';
+
+    if (isOver) {
+        statusText = 'OVER';
+        statusClassName = 'over-pill';
+    } else if (isWarning) {
+        statusText = '⚠ WARNING';
+        statusClassName = 'warning-pill';
+    }
 
     return (
-        <div className="tenant-card usage-card">
+        <div className={`tenant-card usage-card ${isOver ? 'usage-card-over' : ''}`}>
             <h3>Token Utilizations</h3>
 
             <div className="usage-big-number">{used.toLocaleString()}</div>
 
             <div className="usage-progress-row">
                 <div className="progress-container">
-                    <div className="progress" style={{ width: `${percent}%` }} />
+                    <div
+                        className={`progress ${isOver ? 'progress-over' : ''}`}
+                        style={{ width: `${percent}%` }}
+                    />
                 </div>
             </div>
 
             <div className="usage-footer-row">
-                {isWarning ? (
-                    <div className="warning-pill">⚠ WARNING</div>
-                ) : (
-                    <div className="usage-caption">Month-to-date usage</div>
-                )}
+                <div className={statusClassName}>{statusText}</div>
                 <div className="usage-total-number">{total.toLocaleString()}</div>
             </div>
         </div>
@@ -317,7 +338,7 @@ function UsageByDayTable({ events }) {
     );
 }
 
-function EventForm({ onSubmit }) {
+function EventForm({ onSubmit, isAdmin }) {
     const [tenantId, setTenantId] = useState('');
     const [eventType, setEventType] = useState('tokens');
     const [amount, setAmount] = useState('');
@@ -403,6 +424,11 @@ function EventForm({ onSubmit }) {
             return;
         }
 
+        if (!isAdmin && allowOverage) {
+            setErrorMessage('Only admins can use overage override.');
+            return;
+        }
+
         setSubmitting(true);
 
         const payload = {
@@ -415,7 +441,7 @@ function EventForm({ onSubmit }) {
         try {
             let result;
 
-            if (allowOverage) {
+            if (allowOverage && isAdmin) {
                 const response = await api.post('/v1/usage/events?allow_overage=true', payload, {
                     headers: {
                         'x-admin': 'true',
@@ -512,14 +538,21 @@ function EventForm({ onSubmit }) {
                 onChange={(e) => setAmount(e.target.value)}
             />
 
-            <label className="dashboard-checkbox-row">
-                <input
-                    type="checkbox"
-                    checked={allowOverage}
-                    onChange={(e) => setAllowOverage(e.target.checked)}
-                />
-                <span>Allow overage (admin override)</span>
-            </label>
+            {isAdmin ? (
+                <label className="dashboard-checkbox-row">
+                    <input
+                        type="checkbox"
+                        checked={allowOverage}
+                        onChange={(e) => setAllowOverage(e.target.checked)}
+                    />
+                    <span>Allow overage (admin override)</span>
+                </label>
+            ) : (
+                <div className="dashboard-checkbox-row dashboard-checkbox-disabled">
+                    <input type="checkbox" checked={false} disabled readOnly />
+                    <span>Allow overage (admin only)</span>
+                </div>
+            )}
 
             <button type="submit" className="dashboard-submit-btn" disabled={submitting}>
                 {submitting ? 'Creating...' : 'Create Event'}
@@ -531,9 +564,11 @@ function EventForm({ onSubmit }) {
     );
 }
 
-function Dashboard() {
+function Dashboard({ auth }) {
     const [events, setEvents] = useState([]);
     const [loading, setLoading] = useState(true);
+
+    const isAdmin = auth?.user?.role === 'admin';
 
     const fetchEvents = async () => {
         try {
@@ -657,7 +692,7 @@ function Dashboard() {
         <div className="tenant-dashboard">
             <div className="tenant-dashboard-top">
                 <TokenCard used={tokenUsed} total={tokenQuota} />
-                <EventForm onSubmit={handleCreateEvent} />
+                <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} />
             </div>
 
             <section className="usage-history-section">
@@ -668,7 +703,7 @@ function Dashboard() {
     );
 }
 
-function AdminPage() {
+function AdminPage({ auth }) {
     const [tenants, setTenants] = useState([]);
     const [auditRecords, setAuditRecords] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -680,12 +715,19 @@ function AdminPage() {
     const [reason, setReason] = useState('');
     const [updating, setUpdating] = useState(false);
 
+    const isAdmin = auth?.user?.role === 'admin';
+
     const fetchTenants = async () => {
         const response = await api.get('/v1/tenants');
         setTenants(response.data.tenants);
     };
 
     const fetchAuditLogs = async () => {
+        if (!isAdmin) {
+            setAuditRecords([]);
+            return;
+        }
+
         const response = await api.get('/v1/audit', {
             headers: {
                 'x-admin': 'true',
@@ -711,6 +753,8 @@ function AdminPage() {
     }, []);
 
     const openModal = (tenant) => {
+        if (!isAdmin) return;
+
         setCurrentTenant(tenant);
         setNewQuota(String(tenant.configured_monthly_quota));
         setReason('');
@@ -726,6 +770,11 @@ function AdminPage() {
     };
 
     const updateTenant = async () => {
+        if (!isAdmin) {
+            alert('Only admins can update tenant quota.');
+            return;
+        }
+
         if (!currentTenant) return;
 
         const trimmedReason = reason.trim();
@@ -789,9 +838,11 @@ function AdminPage() {
             <div className="admin-page">
                 <div className="admin-page-topbar">
                     <h2>Admin View</h2>
-                    <button className="edit-btn" onClick={loadAdminData}>
-                        Refresh
-                    </button>
+                    {isAdmin && (
+                        <button className="edit-btn" onClick={loadAdminData}>
+                            Refresh
+                        </button>
+                    )}
                 </div>
                 <p>{error}</p>
             </div>
@@ -802,9 +853,11 @@ function AdminPage() {
         <div className="admin-page">
             <div className="admin-page-topbar">
                 <h2>Admin View</h2>
-                <button className="edit-btn" onClick={loadAdminData}>
-                    Refresh
-                </button>
+                {isAdmin && (
+                    <button className="edit-btn" onClick={loadAdminData}>
+                        Refresh
+                    </button>
+                )}
             </div>
 
             {!tenants.length ? (
@@ -828,9 +881,20 @@ function AdminPage() {
                                 <td>{tenant.month_to_date_usage.toLocaleString()}</td>
                                 <td>{formatDate(tenant.last_activity_at)}</td>
                                 <td>
-                                    <button className="edit-btn" onClick={() => openModal(tenant)}>
-                                        Edit
-                                    </button>
+                                    {isAdmin ? (
+                                        <button
+                                            className="edit-btn"
+                                            onClick={() => openModal(tenant)}>
+                                            Edit
+                                        </button>
+                                    ) : (
+                                        <button
+                                            className="edit-btn edit-btn-disabled"
+                                            disabled
+                                            title="Admin only">
+                                            Edit
+                                        </button>
+                                    )}
                                 </td>
                             </tr>
                         ))}
@@ -841,7 +905,9 @@ function AdminPage() {
             <div className="audit-trail-block">
                 <h3>Audit Trail</h3>
 
-                {!auditRecords.length ? (
+                {!isAdmin ? (
+                    <p>Audit trail is visible to admins only.</p>
+                ) : !auditRecords.length ? (
                     <p>No audit records yet.</p>
                 ) : (
                     <table className="tenant-table">
@@ -950,7 +1016,7 @@ function AppShell({ auth, onLogout }) {
                         path="/"
                         element={
                             <ProtectedRoute isAuthenticated={!!auth}>
-                                <Dashboard />
+                                <Dashboard auth={auth} />
                             </ProtectedRoute>
                         }
                     />
@@ -958,7 +1024,7 @@ function AppShell({ auth, onLogout }) {
                         path="/admin"
                         element={
                             <ProtectedRoute isAuthenticated={!!auth}>
-                                <AdminPage />
+                                <AdminPage auth={auth} />
                             </ProtectedRoute>
                         }
                     />
