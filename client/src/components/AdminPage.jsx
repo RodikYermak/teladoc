@@ -1,39 +1,38 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import api from '../api';
 
-const initialTenants = [
-    {
-        id: 1,
-        email: 'tenant1@email.com',
-        quota: 1000000,
-        used: 800000,
-        lastActivity: 'Tokens processed',
-    },
-    {
-        id: 2,
-        email: 'tenant2@email.com',
-        quota: 1200000,
-        used: 220000,
-        lastActivity: 'Inference seconds',
-    },
-    {
-        id: 3,
-        email: 'tenant3@email.com',
-        quota: 1500000,
-        used: 70000,
-        lastActivity: 'Tokens processed',
-    },
-];
+function formatDate(value) {
+    if (!value) return 'No activity yet';
+    return new Date(value).toLocaleString();
+}
 
 export default function AdminPage() {
-    const [tenants, setTenants] = useState(initialTenants);
+    const [tenants, setTenants] = useState([]);
+    const [loading, setLoading] = useState(true);
+
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentTenant, setCurrentTenant] = useState(null);
     const [newQuota, setNewQuota] = useState('');
     const [reason, setReason] = useState('');
 
+    useEffect(() => {
+        const fetchTenants = async () => {
+            try {
+                const res = await api.get('/v1/tenants');
+                setTenants(res.data.tenants);
+            } catch (err) {
+                console.error('Error fetching tenants:', err);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchTenants();
+    }, []);
+
     const openModal = (tenant) => {
         setCurrentTenant(tenant);
-        setNewQuota(String(tenant.quota));
+        setNewQuota(String(tenant.configured_monthly_quota));
         setReason('');
         setIsModalOpen(true);
     };
@@ -46,16 +45,28 @@ export default function AdminPage() {
     };
 
     const updateTenant = () => {
-        if (!currentTenant || !newQuota || !reason.trim()) return;
+        if (!currentTenant) return;
 
+        // 🔥 For now: update locally (no backend yet)
         setTenants((prev) =>
-            prev.map((tenant) =>
-                tenant.id === currentTenant.id ? { ...tenant, quota: Number(newQuota) } : tenant,
+            prev.map((t) =>
+                t.tenant_id === currentTenant.tenant_id
+                    ? { ...t, configured_monthly_quota: Number(newQuota) }
+                    : t,
             ),
         );
 
         closeModal();
     };
+
+    if (loading) {
+        return (
+            <div className="admin-page">
+                <h2>Admin View</h2>
+                <p>Loading tenants...</p>
+            </div>
+        );
+    }
 
     return (
         <div className="admin-page">
@@ -64,7 +75,7 @@ export default function AdminPage() {
             <table className="tenant-table">
                 <thead>
                     <tr>
-                        <th>Tenant</th>
+                        <th>Tenant ID</th>
                         <th>Quota</th>
                         <th>Used</th>
                         <th>Last Activity</th>
@@ -73,11 +84,11 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                     {tenants.map((tenant) => (
-                        <tr key={tenant.id}>
-                            <td>{tenant.email}</td>
-                            <td>{tenant.quota.toLocaleString()}</td>
-                            <td>{tenant.used.toLocaleString()}</td>
-                            <td>{tenant.lastActivity}</td>
+                        <tr key={tenant.tenant_id}>
+                            <td>{tenant.tenant_id}</td>
+                            <td>{tenant.configured_monthly_quota.toLocaleString()}</td>
+                            <td>{tenant.month_to_date_usage.toLocaleString()}</td>
+                            <td>{formatDate(tenant.last_activity_at)}</td>
                             <td>
                                 <button className="edit-btn" onClick={() => openModal(tenant)}>
                                     Edit
@@ -88,6 +99,7 @@ export default function AdminPage() {
                 </tbody>
             </table>
 
+            {/* 🔥 Modal */}
             {isModalOpen && currentTenant && (
                 <div className="overlay">
                     <div className="modal">
@@ -95,12 +107,12 @@ export default function AdminPage() {
 
                         <div className="field">
                             <label>Tenant</label>
-                            <input type="text" value={currentTenant.email} readOnly />
+                            <input value={currentTenant.tenant_id} readOnly />
                         </div>
 
                         <div className="field">
                             <label>Current Quota</label>
-                            <input type="text" value={currentTenant.quota} readOnly />
+                            <input value={currentTenant.configured_monthly_quota} readOnly />
                         </div>
 
                         <div className="field">
@@ -115,9 +127,7 @@ export default function AdminPage() {
                         <div className="field">
                             <label>Reason</label>
                             <input
-                                type="text"
                                 placeholder="Reason for change"
-                                maxLength={100}
                                 value={reason}
                                 onChange={(e) => setReason(e.target.value)}
                             />

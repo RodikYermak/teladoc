@@ -89,12 +89,10 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Literal
+from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
-
-# ----------- Models -----------
 
 class EventCreate(BaseModel):
     tenant_id: UUID
@@ -114,27 +112,50 @@ class EventsResponse(BaseModel):
     events: List[Event]
 
 
-# ----------- App Setup -----------
+class TenantRecord(BaseModel):
+    tenant_id: UUID
+    configured_monthly_quota: int = Field(gt=0)
+
+
+class TenantSummary(BaseModel):
+    tenant_id: UUID
+    configured_monthly_quota: int
+    month_to_date_usage: int
+    last_activity_at: Optional[datetime] = None
+
+
+class TenantsResponse(BaseModel):
+    tenants: List[TenantSummary]
+
 
 app = FastAPI(debug=True)
 
-origins = [
-    "http://localhost:5173",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory storage (resets on restart)
-memory_db = {"events": []}
+memory_db = {
+    "events": [],
+    "tenants": [
+        TenantRecord(
+            tenant_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+            configured_monthly_quota=1200000,
+        ),
+        TenantRecord(
+            tenant_id=UUID("11111111-1111-1111-1111-111111111111"),
+            configured_monthly_quota=800000,
+        ),
+        TenantRecord(
+            tenant_id=UUID("22222222-2222-2222-2222-222222222222"),
+            configured_monthly_quota=500000,
+        ),
+    ],
+}
 
-
-# ----------- Legacy Endpoints (optional) -----------
 
 @app.get("/events", response_model=EventsResponse)
 def get_events():
@@ -152,35 +173,56 @@ def add_event(event: EventCreate):
     return new_event
 
 
-# ----------- New v1 API -----------
-
 @app.post("/v1/usage/events", response_model=Event, status_code=201)
 def create_usage_event(event: EventCreate):
-    """
-    Record a usage event for a tenant.
-    """
     new_event = Event(
         tenant_id=event.tenant_id,
         event_type=event.event_type,
         amount=event.amount,
     )
-
     memory_db["events"].append(new_event)
-
-    print("Current events:", memory_db["events"])  # debug log
-
     return new_event
 
 
 @app.get("/v1/usage/events", response_model=EventsResponse)
 def list_usage_events():
-    """
-    List all usage events (simple version).
-    """
     return {"events": memory_db["events"]}
 
 
-# ----------- Run Server -----------
+@app.get("/v1/tenants", response_model=TenantsResponse)
+def list_tenants():
+    now = datetime.now(timezone.utc)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+    tenant_summaries: List[TenantSummary] = []
+
+    for tenant in memory_db["tenants"]:
+        tenant_events = [
+            event for event in memory_db["events"]
+            if event.tenant_id == tenant.tenant_id
+        ]
+
+        month_to_date_usage = sum(
+            event.amount
+            for event in tenant_events
+            if event.timestamp >= month_start
+        )
+
+        last_activity_at = None
+        if tenant_events:
+            last_activity_at = max(event.timestamp for event in tenant_events)
+
+        tenant_summaries.append(
+            TenantSummary(
+                tenant_id=tenant.tenant_id,
+                configured_monthly_quota=tenant.configured_monthly_quota,
+                month_to_date_usage=month_to_date_usage,
+                last_activity_at=last_activity_at,
+            )
+        )
+
+    return {"tenants": tenant_summaries}
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
