@@ -239,6 +239,46 @@ def parse_iso_datetime(value: str, field_name: str) -> datetime:
     return parsed
 
 
+def check_db_connectivity() -> dict:
+    """
+    Placeholder DB readiness check.
+
+    Right now this app uses in-memory storage, so there is no external DB
+    connection to verify. When you add Postgres/SQLite/etc, replace this
+    function with a real ping/query.
+    """
+    return {
+        "configured": False,
+        "status": "not_configured",
+        "detail": "No external database configured; using in-memory storage.",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "usage-api",
+        "time": datetime.now(timezone.utc),
+    }
+
+
+@app.get("/ready")
+def ready():
+    db_status = check_db_connectivity()
+
+    is_ready = True
+
+    return {
+        "status": "ready" if is_ready else "not_ready",
+        "service": "usage-api",
+        "time": datetime.now(timezone.utc),
+        "checks": {
+            "db": db_status,
+        },
+    }
+
+
 @app.get("/v1/usage/events", response_model=EventsResponse)
 def list_usage_events():
     return {"events": memory_db["events"]}
@@ -353,7 +393,6 @@ def get_tenant_usage(
     if granularity != "day":
         raise HTTPException(status_code=400, detail="Only granularity=day is supported")
 
-    # Aggregate token usage into daily UTC buckets
     bucket_totals: dict[date, int] = defaultdict(int)
 
     for event in memory_db["events"]:
@@ -367,7 +406,6 @@ def get_tenant_usage(
         bucket_day = event.timestamp.astimezone(timezone.utc).date()
         bucket_totals[bucket_day] += event.amount
 
-    # Build all daily buckets in range, including zero-usage days
     current_day_start = datetime(
         from_dt.year, from_dt.month, from_dt.day, tzinfo=timezone.utc
     )
@@ -375,8 +413,7 @@ def get_tenant_usage(
         to_dt.year, to_dt.month, to_dt.day, tzinfo=timezone.utc
     )
 
-    # If "to" is not exactly midnight, include that calendar day too
-    if to_dt.time() != datetime.min.time().replace(tzinfo=None):
+    if to_dt.time() != datetime.min.time():
         days_end_exclusive = last_day_start + timedelta(days=1)
     else:
         days_end_exclusive = last_day_start
@@ -388,7 +425,6 @@ def get_tenant_usage(
         next_cursor = cursor + timedelta(days=1)
         bucket_amount = bucket_totals.get(cursor.date(), 0)
 
-        # Clip displayed bucket edges to requested range
         bucket_start = max(cursor, from_dt)
         bucket_end = min(next_cursor, to_dt)
 
