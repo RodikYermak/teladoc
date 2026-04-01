@@ -8,7 +8,7 @@ describe('TokenCard', () => {
     it('renders normal state', () => {
         render(<TokenCard used={400} total={1000} />);
 
-        expect(screen.getByText('Month-to-date usage')).toBeInTheDocument();
+        expect(screen.getByText('NORMAL')).toBeInTheDocument();
         expect(screen.queryByText('⚠ WARNING')).not.toBeInTheDocument();
         expect(screen.queryByText('OVER')).not.toBeInTheDocument();
     });

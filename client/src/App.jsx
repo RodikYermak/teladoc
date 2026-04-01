@@ -225,7 +225,7 @@ function LoginPage({ onLogin }) {
     );
 }
 
-export function TokenCard({ used, total, tenants = [], selectedTenantId = '', onTenantChange }) {
+export function TokenCard({ used, total }) {
     const percentRaw = total > 0 ? (used / total) * 100 : 0;
     const percent = total > 0 ? Math.min(percentRaw, 100) : 0;
 
@@ -264,30 +264,10 @@ export function TokenCard({ used, total, tenants = [], selectedTenantId = '', on
                 <div className={`pill ${statusClassName}`}>{statusText}</div>
                 <div className="usage-total-number">{total.toLocaleString()}</div>
             </div>
-
-            <div className="dashboard-admin-tenant-picker">
-                <label
-                    className="dashboard-form-label"
-                    htmlFor="admin-tenant-select"
-                    style={{ display: 'block', marginBottom: '15px' }}>
-                    Selected Tenant
-                </label>
-                <select
-                    id="admin-tenant-select"
-                    value={selectedTenantId}
-                    onChange={(e) => onTenantChange(e.target.value)}>
-                    {tenants.map((tenant) => (
-                        <option key={tenant.tenant_id} value={tenant.tenant_id}>
-                            {tenant.tenant_id}
-                        </option>
-                    ))}
-                </select>
-            </div>
         </div>
     );
 }
 
-/* rest of your file stays the same */
 
 function UsageByDayTable({ events }) {
     if (!events.length) {
@@ -340,7 +320,14 @@ function UsageByDayTable({ events }) {
     );
 }
 
-function EventForm({ onSubmit, isAdmin, auth, defaultTenantId = '' }) {
+function EventForm({
+    onSubmit,
+    isAdmin,
+    auth,
+    defaultTenantId = '',
+    tenants = [],
+    onTenantChange,
+}) {
     const tenantScopedId = auth?.user?.tenant_id || '';
     const [tenantId, setTenantId] = useState(tenantScopedId || defaultTenantId);
     const [eventType, setEventType] = useState('tokens');
@@ -360,6 +347,11 @@ function EventForm({ onSubmit, isAdmin, auth, defaultTenantId = '' }) {
             setTenantId(defaultTenantId);
         }
     }, [isAdmin, tenantScopedId, defaultTenantId]);
+
+    const handleAdminTenantChange = (value) => {
+        setTenantId(value);
+        onTenantChange?.(value);
+    };
 
     const buildFriendlyErrorMessage = (error) => {
         const status = error.response?.status;
@@ -474,6 +466,7 @@ function EventForm({ onSubmit, isAdmin, auth, defaultTenantId = '' }) {
             if (isAdmin) {
                 setTenantId(defaultTenantId || '');
             }
+
             setEventType('tokens');
             setAmount('');
             setAllowOverage(false);
@@ -495,13 +488,24 @@ function EventForm({ onSubmit, isAdmin, auth, defaultTenantId = '' }) {
             </select>
 
             <label className="dashboard-form-label">Tenant ID</label>
-            <input
-                type="text"
-                placeholder="Tenant UUID"
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                readOnly={!isAdmin}
-            />
+
+            {isAdmin ? (
+                <select value={tenantId} onChange={(e) => handleAdminTenantChange(e.target.value)}>
+                    {tenants.map((tenant) => (
+                        <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                            {tenant.tenant_id}
+                        </option>
+                    ))}
+                </select>
+            ) : (
+                <input
+                    type="text"
+                    placeholder="Tenant UUID"
+                    value={tenantId}
+                    onChange={(e) => setTenantId(e.target.value)}
+                    readOnly
+                />
+            )}
 
             <label className="dashboard-form-label">Amount</label>
             <input
@@ -683,39 +687,16 @@ function Dashboard({ auth, onUnauthorized }) {
                 <h1 className="dashboard-page-title">{dashboardTitle}</h1>
                 <p className="dashboard-page-subtitle">{dashboardSubtitle}</p>
             </div>
-            {/* 
-            {isAdmin && tenants.length > 0 && (
-                <div className="dashboard-admin-tenant-picker">
-                    <label className="dashboard-form-label" htmlFor="admin-tenant-select">
-                        Selected Tenant
-                    </label>
-                    <select
-                        id="admin-tenant-select"
-                        value={selectedAdminTenantId}
-                        onChange={(e) => setSelectedAdminTenantId(e.target.value)}>
-                        {tenants.map((tenant) => (
-                            <option key={tenant.tenant_id} value={tenant.tenant_id}>
-                                {tenant.tenant_id}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-            )} */}
 
             <div className="tenant-dashboard-top">
-                <TokenCard
-                    used={tokenUsed}
-                    total={tokenQuota}
-                    isAdmin={isAdmin}
-                    tenants={tenants}
-                    selectedTenantId={selectedAdminTenantId}
-                    onTenantChange={setSelectedAdminTenantId}
-                />
+                <TokenCard used={tokenUsed} total={tokenQuota} />
                 <EventForm
                     onSubmit={handleCreateEvent}
                     isAdmin={isAdmin}
                     auth={auth}
                     defaultTenantId={isAdmin ? selectedAdminTenantId : tenantScopedId || ''}
+                    tenants={tenants}
+                    onTenantChange={setSelectedAdminTenantId}
                 />
             </div>
 

@@ -885,27 +885,6 @@ small {
     }
 }
 
-.dashboard-admin-tenant-picker {
-    margin-top: 35px;
-}
-
-.dashboard-admin-tenant-picker select {
-    width: 100%;
-    max-width: 420px;
-    height: 46px;
-    padding: 0 14px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-lg);
-    background: var(--color-bg-surface);
-    font-size: var(--font-size-md);
-}
-
-.dashboard-admin-tenant-picker select:focus {
-    outline: none;
-    border-color: var(--color-brand-primary);
-    box-shadow: 0 0 0 3px var(--color-focus-ring);
-}
-
 .normal-pill {
     display: inline-block;
     padding: 4px 10px;
