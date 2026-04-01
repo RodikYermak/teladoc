@@ -1,10 +1,26 @@
 services:
-  web:
-    build: .
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
+    db:
+        image: postgres:15
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: teladoc
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - '5432:5432'
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+    web:
+        build: .
+        command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+        env_file:
+            - .env
+        ports:
+            - '8000:8000'
+        depends_on:
+            - db
+        volumes:
+            - .:/app
+
+volumes:
+    postgres_data:

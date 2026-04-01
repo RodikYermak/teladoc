@@ -1,19 +1,34 @@
 import hashlib
 import json
+import os
 import secrets
-import uvicorn
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
-from typing import List, Literal, Optional, Any
+from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import FastAPI, HTTPException, Query, Response, Request, Depends, Header, status
+import uvicorn
+from fastapi import FastAPI, HTTPException, Query, Response, Request, Depends, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, ConfigDict, field_validator
+from sqlalchemy import (
+    String,
+    Integer,
+    DateTime,
+    UniqueConstraint,
+    create_engine,
+    select,
+    func,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session, sessionmaker
+
+import time
+from sqlalchemy import text
+
+
 
 
 JWT_SECRET = "dev_only_super_secret_signing_key_change_me"
@@ -26,17 +41,67 @@ MAX_IDEMPOTENCY_KEY_LENGTH = 100
 MAX_REASON_LENGTH = 200
 MIN_REASON_LENGTH = 10
 
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@db:5432/teladoc",
+)
+
 security = HTTPBearer(auto_error=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class TenantORM(Base):
+    __tablename__ = "tenants"
+
+    tenant_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    configured_monthly_quota: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class EventORM(Base):
+    __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_events_tenant_idempotency"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(MAX_IDEMPOTENCY_KEY_LENGTH), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuditRecordORM(Base):
+    __tablename__ = "audit_logs"
+
+    audit_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    old_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(MAX_REASON_LENGTH), nullable=False)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+engine = create_engine(DATABASE_URL, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class ErrorResponse(StrictBaseModel):
-    code: str
-    message: str
-    details: Optional[list | dict | str] = None
 
 
 class LoginRequest(StrictBaseModel):
@@ -85,22 +150,17 @@ class EventCreate(StrictBaseModel):
 
 
 class Event(StrictBaseModel):
-    event_id: UUID = Field(default_factory=uuid4)
+    event_id: UUID
     tenant_id: UUID
     event_type: Literal["tokens", "inference_seconds"]
     amount: int
     idempotency_key: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime
     idempotency_replayed: bool = False
 
 
 class EventsResponse(StrictBaseModel):
     events: List[Event]
-
-
-class TenantRecord(StrictBaseModel):
-    tenant_id: UUID
-    configured_monthly_quota: int = Field(gt=0, le=MAX_EVENT_AMOUNT)
 
 
 class TenantSummary(StrictBaseModel):
@@ -134,14 +194,14 @@ class QuotaUpdateResponse(StrictBaseModel):
 
 
 class AuditRecord(StrictBaseModel):
-    audit_id: UUID = Field(default_factory=uuid4)
+    audit_id: UUID
     tenant_id: UUID
     action: Literal["quota_updated"]
     old_value: int
     new_value: int
     reason: str
     actor: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime
 
 
 class AuditResponse(StrictBaseModel):
@@ -205,16 +265,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-memory_db = {
-    "events": [],
-    "tenants": [
-        TenantRecord(tenant_id=TENANT_1, configured_monthly_quota=1_200_000),
-        TenantRecord(tenant_id=TENANT_2, configured_monthly_quota=800_000),
-        TenantRecord(tenant_id=TENANT_3, configured_monthly_quota=500_000),
-    ],
-    "audit_logs": [],
-    "idempotency_index": {},
-}
+
+@app.on_event("startup")
+def startup():
+    last_error = None
+
+    for attempt in range(15):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("SELECT 1"))
+            break
+        except Exception as exc:
+            last_error = exc
+            print(f"Database not ready yet (attempt {attempt + 1}/15): {exc}")
+            time.sleep(2)
+    else:
+        raise RuntimeError(f"Database not ready after multiple attempts: {last_error}")
+
+    Base.metadata.create_all(bind=engine)
+
+    with SessionLocal() as db:
+        existing_ids = {
+            row[0] for row in db.execute(select(TenantORM.tenant_id)).all()
+        }
+
+        seed_tenants = [
+            (str(TENANT_1), 1_200_000),
+            (str(TENANT_2), 800_000),
+            (str(TENANT_3), 500_000),
+        ]
+
+        for tenant_id, quota in seed_tenants:
+            if tenant_id not in existing_ids:
+                db.add(TenantORM(tenant_id=tenant_id, configured_monthly_quota=quota))
+
+        db.commit()
 
 
 @app.exception_handler(RequestValidationError)
@@ -270,10 +355,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 def unauthorized(message: str = "Authentication required") -> HTTPException:
     return HTTPException(
         status_code=401,
-        detail={
-            "code": "unauthorized",
-            "message": message,
-        },
+        detail={"code": "unauthorized", "message": message},
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -281,10 +363,7 @@ def unauthorized(message: str = "Authentication required") -> HTTPException:
 def forbidden(message: str = "You do not have permission to perform this action") -> HTTPException:
     return HTTPException(
         status_code=403,
-        detail={
-            "code": "forbidden",
-            "message": message,
-        },
+        detail={"code": "forbidden", "message": message},
     )
 
 
@@ -366,34 +445,14 @@ def ensure_tenant_access(auth: AuthContext, tenant_id: UUID) -> None:
     raise forbidden("Tenant scope does not allow access to this tenant")
 
 
-def find_tenant_index(tenant_id: UUID) -> int:
-    for idx, tenant in enumerate(memory_db["tenants"]):
-        if tenant.tenant_id == tenant_id:
-            return idx
-    raise HTTPException(
-        status_code=404,
-        detail={"code": "tenant_not_found", "message": "Tenant not found"},
-    )
-
-
-def get_tenant_record(tenant_id: UUID) -> TenantRecord:
-    for tenant in memory_db["tenants"]:
-        if tenant.tenant_id == tenant_id:
-            return tenant
-    raise HTTPException(
-        status_code=404,
-        detail={"code": "tenant_not_found", "message": "Tenant not found"},
-    )
-
-
-def ensure_tenant_exists(tenant_id: UUID) -> None:
-    for tenant in memory_db["tenants"]:
-        if tenant.tenant_id == tenant_id:
-            return
-    raise HTTPException(
-        status_code=404,
-        detail={"code": "tenant_not_found", "message": "Tenant not found"},
-    )
+def get_tenant_record(db: Session, tenant_id: UUID) -> TenantORM:
+    tenant = db.get(TenantORM, str(tenant_id))
+    if not tenant:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "tenant_not_found", "message": "Tenant not found"},
+        )
+    return tenant
 
 
 def parse_iso_datetime(value: str, field_name: str) -> datetime:
@@ -433,11 +492,20 @@ def make_payload_hash(
 
 
 def check_db_connectivity() -> dict:
-    return {
-        "configured": False,
-        "status": "not_configured",
-        "detail": "No external database configured; using in-memory storage.",
-    }
+    try:
+        with SessionLocal() as db:
+            db.execute(select(1))
+        return {
+            "configured": True,
+            "status": "ok",
+            "detail": "Database connection is healthy.",
+        }
+    except Exception as exc:
+        return {
+            "configured": True,
+            "status": "error",
+            "detail": str(exc),
+        }
 
 
 def get_month_start(dt: datetime) -> datetime:
@@ -445,17 +513,23 @@ def get_month_start(dt: datetime) -> datetime:
     return datetime(dt_utc.year, dt_utc.month, 1, tzinfo=timezone.utc)
 
 
-def get_month_to_date_token_usage(tenant_id: UUID, as_of: Optional[datetime] = None) -> int:
+def get_month_to_date_token_usage(
+    db: Session,
+    tenant_id: UUID,
+    as_of: Optional[datetime] = None,
+) -> int:
     now = as_of or datetime.now(timezone.utc)
     month_start = get_month_start(now)
 
-    return sum(
-        event.amount
-        for event in memory_db["events"]
-        if event.tenant_id == tenant_id
-        and event.event_type == "tokens"
-        and month_start <= event.timestamp <= now
+    total = db.scalar(
+        select(func.coalesce(func.sum(EventORM.amount), 0)).where(
+            EventORM.tenant_id == str(tenant_id),
+            EventORM.event_type == "tokens",
+            EventORM.timestamp >= month_start,
+            EventORM.timestamp <= now,
+        )
     )
+    return int(total or 0)
 
 
 def validate_event_timestamp(event_timestamp: datetime) -> None:
@@ -484,6 +558,18 @@ def validate_event_timestamp(event_timestamp: datetime) -> None:
                 "min_allowed_timestamp": past_limit.isoformat(),
             },
         )
+
+
+def orm_event_to_api(event: EventORM, replayed: bool = False) -> Event:
+    return Event(
+        event_id=UUID(event.event_id),
+        tenant_id=UUID(event.tenant_id),
+        event_type=event.event_type,
+        amount=event.amount,
+        idempotency_key=event.idempotency_key,
+        timestamp=event.timestamp,
+        idempotency_replayed=replayed,
+    )
 
 
 @app.post("/v1/auth/login", response_model=LoginResponse)
@@ -521,7 +607,7 @@ def health():
 def ready():
     db_status = check_db_connectivity()
     return {
-        "status": "ready",
+        "status": "ready" if db_status["status"] == "ok" else "not_ready",
         "service": "usage-api",
         "time": datetime.now(timezone.utc),
         "checks": {"db": db_status},
@@ -529,12 +615,17 @@ def ready():
 
 
 @app.get("/v1/usage/events", response_model=EventsResponse)
-def list_usage_events(auth: AuthContext = Depends(get_current_auth)):
-    if auth.role == "admin":
-        return {"events": memory_db["events"]}
+def list_usage_events(
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    stmt = select(EventORM).order_by(EventORM.timestamp.desc())
 
-    tenant_events = [event for event in memory_db["events"] if event.tenant_id == auth.tenant_id]
-    return {"events": tenant_events}
+    if auth.role == "tenant":
+        stmt = stmt.where(EventORM.tenant_id == str(auth.tenant_id))
+
+    events = db.execute(stmt).scalars().all()
+    return {"events": [orm_event_to_api(event) for event in events]}
 
 
 @app.post("/v1/usage/events", response_model=Event)
@@ -543,8 +634,9 @@ def create_usage_event(
     response: Response,
     allow_overage: bool = Query(False),
     auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
 ):
-    ensure_tenant_exists(event.tenant_id)
+    tenant = get_tenant_record(db, event.tenant_id)
     ensure_tenant_access(auth, event.tenant_id)
 
     if allow_overage and auth.role != "admin":
@@ -553,7 +645,6 @@ def create_usage_event(
     event_timestamp = event.timestamp or datetime.now(timezone.utc)
     validate_event_timestamp(event_timestamp)
 
-    idempotency_key = (str(event.tenant_id), event.idempotency_key)
     incoming_payload_hash = make_payload_hash(
         tenant_id=event.tenant_id,
         event_type=event.event_type,
@@ -561,9 +652,15 @@ def create_usage_event(
         timestamp=event_timestamp,
     )
 
-    existing = memory_db["idempotency_index"].get(idempotency_key)
+    existing = db.execute(
+        select(EventORM).where(
+            EventORM.tenant_id == str(event.tenant_id),
+            EventORM.idempotency_key == event.idempotency_key,
+        )
+    ).scalar_one_or_none()
+
     if existing:
-        if existing["payload_hash"] != incoming_payload_hash:
+        if existing.payload_hash != incoming_payload_hash:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -574,24 +671,10 @@ def create_usage_event(
 
         response.status_code = status.HTTP_200_OK
         response.headers["X-Idempotent-Replay"] = "true"
-
-        stored_event: Event = existing["event"]
-        ensure_tenant_access(auth, stored_event.tenant_id)
-
-        return Event(
-            event_id=stored_event.event_id,
-            tenant_id=stored_event.tenant_id,
-            event_type=stored_event.event_type,
-            amount=stored_event.amount,
-            idempotency_key=stored_event.idempotency_key,
-            timestamp=stored_event.timestamp,
-            idempotency_replayed=True,
-        )
-
-    tenant = get_tenant_record(event.tenant_id)
+        return orm_event_to_api(existing, replayed=True)
 
     if event.event_type == "tokens":
-        month_to_date_usage = get_month_to_date_token_usage(event.tenant_id, as_of=event_timestamp)
+        month_to_date_usage = get_month_to_date_token_usage(db, event.tenant_id, as_of=event_timestamp)
         projected_usage = month_to_date_usage + event.amount
         remaining_units = max(tenant.configured_monthly_quota - month_to_date_usage, 0)
 
@@ -613,60 +696,63 @@ def create_usage_event(
                 },
             )
 
-    new_event = Event(
-        tenant_id=event.tenant_id,
+    new_event = EventORM(
+        event_id=str(uuid4()),
+        tenant_id=str(event.tenant_id),
         event_type=event.event_type,
         amount=event.amount,
         idempotency_key=event.idempotency_key,
+        payload_hash=incoming_payload_hash,
         timestamp=event_timestamp,
     )
 
-    memory_db["events"].append(new_event)
-    memory_db["idempotency_index"][idempotency_key] = {
-        "payload_hash": incoming_payload_hash,
-        "event": new_event,
-    }
+    db.add(new_event)
+    db.commit()
+    db.refresh(new_event)
 
     response.status_code = status.HTTP_201_CREATED
     response.headers["X-Idempotent-Replay"] = "false"
-    return new_event
+    return orm_event_to_api(new_event)
 
 
 @app.get("/v1/tenants", response_model=TenantsResponse)
-def list_tenants(auth: AuthContext = Depends(get_current_auth)):
+def list_tenants(
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
     now = datetime.now(timezone.utc)
     month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
 
-    tenant_summaries: List[TenantSummary] = []
+    stmt = select(TenantORM)
+    if auth.role == "tenant":
+        stmt = stmt.where(TenantORM.tenant_id == str(auth.tenant_id))
 
-    for tenant in memory_db["tenants"]:
-        if auth.role == "tenant" and tenant.tenant_id != auth.tenant_id:
-            continue
+    tenants = db.execute(stmt).scalars().all()
+    summaries = []
 
-        tenant_events = [
-            event for event in memory_db["events"] if event.tenant_id == tenant.tenant_id
-        ]
+    for tenant in tenants:
+        month_to_date_usage = db.scalar(
+            select(func.coalesce(func.sum(EventORM.amount), 0)).where(
+                EventORM.tenant_id == tenant.tenant_id,
+                EventORM.event_type == "tokens",
+                EventORM.timestamp >= month_start,
+            )
+        ) or 0
 
-        month_to_date_usage = sum(
-            event.amount
-            for event in tenant_events
-            if event.timestamp >= month_start and event.event_type == "tokens"
+        last_activity_at = db.scalar(
+            select(func.max(EventORM.timestamp)).where(EventORM.tenant_id == tenant.tenant_id)
         )
 
-        last_activity_at = None
-        if tenant_events:
-            last_activity_at = max(event.timestamp for event in tenant_events)
-
-        tenant_summaries.append(
+        summaries.append(
             TenantSummary(
-                tenant_id=tenant.tenant_id,
+                tenant_id=UUID(tenant.tenant_id),
                 configured_monthly_quota=tenant.configured_monthly_quota,
-                month_to_date_usage=month_to_date_usage,
+                month_to_date_usage=int(month_to_date_usage),
                 last_activity_at=last_activity_at,
             )
         )
 
-    return {"tenants": tenant_summaries}
+    return {"tenants": summaries}
 
 
 @app.put("/v1/tenants/{tenant_id}/quota", response_model=QuotaUpdateResponse)
@@ -674,42 +760,61 @@ def update_tenant_quota(
     tenant_id: UUID,
     payload: QuotaUpdateRequest,
     auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
 ):
     require_admin(auth)
 
-    tenant_index = find_tenant_index(tenant_id)
-    tenant = memory_db["tenants"][tenant_index]
-
+    tenant = get_tenant_record(db, tenant_id)
     old_quota = tenant.configured_monthly_quota
-    new_quota = payload.new_monthly_quota
+    tenant.configured_monthly_quota = payload.new_monthly_quota
 
-    updated_tenant = TenantRecord(
-        tenant_id=tenant.tenant_id,
-        configured_monthly_quota=new_quota,
-    )
-    memory_db["tenants"][tenant_index] = updated_tenant
-
-    audit_record = AuditRecord(
-        tenant_id=tenant_id,
+    audit_record = AuditRecordORM(
+        audit_id=str(uuid4()),
+        tenant_id=str(tenant_id),
         action="quota_updated",
         old_value=old_quota,
-        new_value=new_quota,
+        new_value=payload.new_monthly_quota,
         reason=payload.reason,
         actor=auth.sub,
+        timestamp=datetime.now(timezone.utc),
     )
-    memory_db["audit_logs"].append(audit_record)
+
+    db.add(audit_record)
+    db.commit()
 
     return QuotaUpdateResponse(
         tenant_id=tenant_id,
-        configured_monthly_quota=new_quota,
+        configured_monthly_quota=payload.new_monthly_quota,
         updated_at=audit_record.timestamp,
     )
 
 
 @app.get("/v1/audit", response_model=AuditResponse)
-def list_audit_logs(auth: AuthContext = Depends(get_current_auth)):
+def list_audit_logs(
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
     require_admin(auth)
-    return {"records": memory_db["audit_logs"]}
+
+    records = db.execute(
+        select(AuditRecordORM).order_by(AuditRecordORM.timestamp.desc())
+    ).scalars().all()
+
+    return {
+        "records": [
+            AuditRecord(
+                audit_id=UUID(record.audit_id),
+                tenant_id=UUID(record.tenant_id),
+                action=record.action,
+                old_value=record.old_value,
+                new_value=record.new_value,
+                reason=record.reason,
+                actor=record.actor,
+                timestamp=record.timestamp,
+            )
+            for record in records
+        ]
+    }
 
 
 @app.get("/v1/tenants/{tenant_id}/usage", response_model=TenantUsageResponse)
@@ -719,8 +824,9 @@ def get_tenant_usage(
     to: str = Query(...),
     granularity: Literal["day"] = Query("day"),
     auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
 ):
-    ensure_tenant_exists(tenant_id)
+    get_tenant_record(db, tenant_id)
     ensure_tenant_access(auth, tenant_id)
 
     from_dt = parse_iso_datetime(from_, "from")
@@ -729,33 +835,28 @@ def get_tenant_usage(
     if from_dt >= to_dt:
         raise HTTPException(
             status_code=400,
-            detail={
-                "code": "invalid_date_range",
-                "message": "'from' must be earlier than 'to'",
-            },
+            detail={"code": "invalid_date_range", "message": "'from' must be earlier than 'to'"},
         )
 
     if granularity != "day":
         raise HTTPException(
             status_code=400,
-            detail={
-                "code": "unsupported_granularity",
-                "message": "Only granularity=day is supported",
-            },
+            detail={"code": "unsupported_granularity", "message": "Only granularity=day is supported"},
         )
 
-    bucket_totals: dict[date, int] = defaultdict(int)
+    events = db.execute(
+        select(EventORM).where(
+            EventORM.tenant_id == str(tenant_id),
+            EventORM.event_type == "tokens",
+            EventORM.timestamp >= from_dt,
+            EventORM.timestamp < to_dt,
+        )
+    ).scalars().all()
 
-    for event in memory_db["events"]:
-        if event.tenant_id != tenant_id:
-            continue
-        if event.event_type != "tokens":
-            continue
-        if not (from_dt <= event.timestamp < to_dt):
-            continue
-
+    bucket_totals: dict[date, int] = {}
+    for event in events:
         bucket_day = event.timestamp.astimezone(timezone.utc).date()
-        bucket_totals[bucket_day] += event.amount
+        bucket_totals[bucket_day] = bucket_totals.get(bucket_day, 0) + event.amount
 
     current_day_start = datetime(from_dt.year, from_dt.month, from_dt.day, tzinfo=timezone.utc)
     last_day_start = datetime(to_dt.year, to_dt.month, to_dt.day, tzinfo=timezone.utc)
