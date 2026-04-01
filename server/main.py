@@ -102,6 +102,18 @@ class EventCreate(BaseModel):
     event_type: Literal["tokens", "inference_seconds"]
     amount: int = Field(gt=0)
     idempotency_key: str = Field(min_length=1, max_length=100)
+    timestamp: Optional[datetime] = None
+
+    @field_validator("timestamp")
+    @classmethod
+    def normalize_timestamp(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return value
+
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+
+        return value.astimezone(timezone.utc)
 
 
 class Event(BaseModel):
@@ -263,11 +275,17 @@ def parse_iso_datetime(value: str, field_name: str) -> datetime:
     return parsed
 
 
-def make_payload_hash(tenant_id: UUID, event_type: str, amount: int) -> str:
+def make_payload_hash(
+    tenant_id: UUID,
+    event_type: str,
+    amount: int,
+    timestamp: datetime,
+) -> str:
     normalized_payload = {
         "tenant_id": str(tenant_id),
         "event_type": event_type,
         "amount": amount,
+        "timestamp": timestamp.isoformat(),
     }
     raw = json.dumps(normalized_payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -297,6 +315,34 @@ def get_month_to_date_token_usage(tenant_id: UUID, as_of: Optional[datetime] = N
         and event.event_type == "tokens"
         and month_start <= event.timestamp <= now
     )
+
+
+def validate_event_timestamp(event_timestamp: datetime) -> None:
+    now = datetime.now(timezone.utc)
+    future_limit = now + timedelta(minutes=5)
+    past_limit = now - timedelta(days=30)
+
+    if event_timestamp > future_limit:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "event_timestamp_in_future",
+                "message": "Event timestamp cannot be more than 5 minutes in the future",
+                "timestamp": event_timestamp.isoformat(),
+                "max_allowed_timestamp": future_limit.isoformat(),
+            },
+        )
+
+    if event_timestamp < past_limit:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "event_timestamp_too_old",
+                "message": "Event timestamp cannot be more than 30 days in the past",
+                "timestamp": event_timestamp.isoformat(),
+                "min_allowed_timestamp": past_limit.isoformat(),
+            },
+        )
 
 
 @app.get("/health")
@@ -335,11 +381,15 @@ def create_usage_event(
 ):
     ensure_tenant_exists(event.tenant_id)
 
+    event_timestamp = event.timestamp or datetime.now(timezone.utc)
+    validate_event_timestamp(event_timestamp)
+
     idempotency_key = (str(event.tenant_id), event.idempotency_key)
     incoming_payload_hash = make_payload_hash(
         tenant_id=event.tenant_id,
         event_type=event.event_type,
         amount=event.amount,
+        timestamp=event_timestamp,
     )
 
     existing = memory_db["idempotency_index"].get(idempotency_key)
@@ -367,7 +417,7 @@ def create_usage_event(
     tenant = get_tenant_record(event.tenant_id)
 
     if event.event_type == "tokens":
-        month_to_date_usage = get_month_to_date_token_usage(event.tenant_id)
+        month_to_date_usage = get_month_to_date_token_usage(event.tenant_id, as_of=event_timestamp)
         projected_usage = month_to_date_usage + event.amount
         remaining_units = max(tenant.configured_monthly_quota - month_to_date_usage, 0)
 
@@ -394,6 +444,7 @@ def create_usage_event(
         event_type=event.event_type,
         amount=event.amount,
         idempotency_key=event.idempotency_key,
+        timestamp=event_timestamp,
     )
 
     memory_db["events"].append(new_event)
