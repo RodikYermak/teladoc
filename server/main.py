@@ -492,19 +492,28 @@ def make_payload_hash(
 
 
 def check_db_connectivity() -> dict:
+    started_at = time.perf_counter()
+
     try:
         with SessionLocal() as db:
-            db.execute(select(1))
+            db.execute(text("SELECT 1"))
+
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
         return {
             "configured": True,
             "status": "ok",
             "detail": "Database connection is healthy.",
+            "latency_ms": latency_ms,
         }
     except Exception as exc:
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
         return {
             "configured": True,
             "status": "error",
             "detail": str(exc),
+            "latency_ms": latency_ms,
         }
 
 
@@ -606,12 +615,28 @@ def health():
 @app.get("/ready")
 def ready():
     db_status = check_db_connectivity()
-    return {
-        "status": "ready" if db_status["status"] == "ok" else "not_ready",
+    is_ready = db_status["status"] == "ok"
+
+    payload = {
+        "status": "ready" if is_ready else "not_ready",
         "service": "usage-api",
         "time": datetime.now(timezone.utc),
-        "checks": {"db": db_status},
+        "checks": {
+            "db": db_status,
+        },
     }
+
+    if not is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "service_not_ready",
+                "message": "Service is not ready",
+                "details": payload["checks"],
+            },
+        )
+
+    return payload
 
 
 @app.get("/v1/usage/events", response_model=EventsResponse)
