@@ -14,7 +14,7 @@ def login(client, identifier="admin", password="password123"):
 
 
 def test_create_event_persists_to_real_postgres(client):
-    headers = login(client, "tenant", "password123")
+    headers = login(client, "tenant1", "password123")
 
     payload = {
         "tenant_id": str(TENANT_1),
@@ -36,7 +36,7 @@ def test_create_event_persists_to_real_postgres(client):
 
 
 def test_idempotency_does_not_double_count_with_real_postgres(client):
-    headers = login(client, "tenant", "password123")
+    headers = login(client, "tenant1", "password123")
     fixed_timestamp = datetime.now(timezone.utc).isoformat()
 
     payload = {
@@ -61,7 +61,7 @@ def test_idempotency_does_not_double_count_with_real_postgres(client):
 
 
 def test_quota_enforcement_blocks_with_real_postgres(client):
-    headers = login(client, "tenant", "password123")
+    headers = login(client, "tenant1", "password123")
 
     first = client.post(
         "/v1/usage/events",
@@ -113,7 +113,7 @@ def test_admin_can_update_quota_and_audit_is_written(client):
 
 
 def test_timestamp_validation_with_real_postgres(client):
-    headers = login(client, "tenant", "password123")
+    headers = login(client, "tenant1", "password123")
 
     too_old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
 

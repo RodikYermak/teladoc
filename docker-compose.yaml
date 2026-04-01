@@ -16,6 +16,16 @@ services:
             timeout: 5s
             retries: 10
 
+    test-db:
+        image: postgres:15
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: teladoc_test
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - '5433:5432'
+
     web:
         build: ./server
         command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
