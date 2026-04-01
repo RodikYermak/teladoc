@@ -776,7 +776,6 @@ def list_tenants(
         month_to_date_usage = db.scalar(
             select(func.coalesce(func.sum(EventORM.amount), 0)).where(
                 EventORM.tenant_id == tenant.tenant_id,
-                EventORM.event_type == "tokens",
                 EventORM.timestamp >= month_start,
             )
         ) or 0

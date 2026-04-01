@@ -245,7 +245,7 @@ export function TokenCard({ used, total }) {
 
     return (
         <div className={`tenant-card usage-card ${isOver ? 'usage-card-over' : ''}`}>
-            <h3>Token Utilizations</h3>
+            <h3>Token Utilization</h3>
 
             <div className="usage-big-number">{used.toLocaleString()}</div>
 
@@ -569,20 +569,17 @@ function Dashboard({ auth, onUnauthorized }) {
             if (!response.data.idempotency_replayed) {
                 setEvents((prev) => [response.data, ...prev]);
 
-                if (response.data.event_type === 'tokens') {
-                    setTenantSummary((prev) => {
-                        if (!prev) return prev;
-                        if (prev.tenant_id !== response.data.tenant_id) return prev;
+                setTenantSummary((prev) => {
+                    if (!prev) return prev;
+                    if (prev.tenant_id !== response.data.tenant_id) return prev;
 
-                        return {
-                            ...prev,
-                            month_to_date_usage:
-                                Number(prev.month_to_date_usage || 0) +
-                                Number(response.data.amount),
-                            last_activity_at: response.data.timestamp,
-                        };
-                    });
-                }
+                    return {
+                        ...prev,
+                        month_to_date_usage:
+                            Number(prev.month_to_date_usage || 0) + Number(response.data.amount),
+                        last_activity_at: response.data.timestamp,
+                    };
+                });
             }
 
             return {
@@ -609,8 +606,8 @@ function Dashboard({ auth, onUnauthorized }) {
         }
     };
 
-    const tokenUsed = tenantSummary?.month_to_date_usage ?? 0;
-    const tokenQuota = tenantSummary?.configured_monthly_quota ?? 0;
+    const totalUsed = tenantSummary?.month_to_date_usage ?? 0;
+    const totalQuota = tenantSummary?.configured_monthly_quota ?? 0;
 
     const dashboardTitle = isAdmin
         ? 'Admin Dashboard View'
@@ -628,7 +625,7 @@ function Dashboard({ auth, onUnauthorized }) {
             </div>
 
             <div className="tenant-dashboard-top">
-                <TokenCard used={tokenUsed} total={tokenQuota} />
+                <TokenCard used={totalUsed} total={totalQuota} />
                 <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} auth={auth} />
             </div>
 
