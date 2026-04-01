@@ -225,15 +225,15 @@ function LoginPage({ onLogin }) {
     );
 }
 
-export function TokenCard({ used, total }) {
+export function TokenCard({ used, total, tenants = [], selectedTenantId = '', onTenantChange }) {
     const percentRaw = total > 0 ? (used / total) * 100 : 0;
     const percent = total > 0 ? Math.min(percentRaw, 100) : 0;
 
     const isOver = total > 0 && used > total;
     const isWarning = total > 0 && used / total > 0.9 && !isOver;
 
-    let statusText = 'Month-to-date usage';
-    let statusClassName = 'usage-caption';
+    let statusText = 'NORMAL';
+    let statusClassName = 'normal-pill';
 
     if (isOver) {
         statusText = 'OVER';
@@ -245,7 +245,9 @@ export function TokenCard({ used, total }) {
 
     return (
         <div className={`tenant-card usage-card ${isOver ? 'usage-card-over' : ''}`}>
-            <h3>Token Utilization</h3>
+            <div className="usage-card-header">
+                <h3>Token Utilizations</h3>
+            </div>
 
             <div className="usage-big-number">{used.toLocaleString()}</div>
 
@@ -259,8 +261,27 @@ export function TokenCard({ used, total }) {
             </div>
 
             <div className="usage-footer-row">
-                <div className={statusClassName}>{statusText}</div>
+                <div className={`pill ${statusClassName}`}>{statusText}</div>
                 <div className="usage-total-number">{total.toLocaleString()}</div>
+            </div>
+
+            <div className="dashboard-admin-tenant-picker">
+                <label
+                    className="dashboard-form-label"
+                    htmlFor="admin-tenant-select"
+                    style={{ display: 'block', marginBottom: '15px' }}>
+                    Selected Tenant
+                </label>
+                <select
+                    id="admin-tenant-select"
+                    value={selectedTenantId}
+                    onChange={(e) => onTenantChange(e.target.value)}>
+                    {tenants.map((tenant) => (
+                        <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                            {tenant.tenant_id}
+                        </option>
+                    ))}
+                </select>
             </div>
         </div>
     );
@@ -319,9 +340,9 @@ function UsageByDayTable({ events }) {
     );
 }
 
-function EventForm({ onSubmit, isAdmin, auth }) {
+function EventForm({ onSubmit, isAdmin, auth, defaultTenantId = '' }) {
     const tenantScopedId = auth?.user?.tenant_id || '';
-    const [tenantId, setTenantId] = useState(tenantScopedId);
+    const [tenantId, setTenantId] = useState(tenantScopedId || defaultTenantId);
     const [eventType, setEventType] = useState('tokens');
     const [amount, setAmount] = useState('');
     const [allowOverage, setAllowOverage] = useState(false);
@@ -332,8 +353,13 @@ function EventForm({ onSubmit, isAdmin, auth }) {
     useEffect(() => {
         if (!isAdmin && tenantScopedId) {
             setTenantId(tenantScopedId);
+            return;
         }
-    }, [isAdmin, tenantScopedId]);
+
+        if (isAdmin && defaultTenantId) {
+            setTenantId(defaultTenantId);
+        }
+    }, [isAdmin, tenantScopedId, defaultTenantId]);
 
     const buildFriendlyErrorMessage = (error) => {
         const status = error.response?.status;
@@ -446,7 +472,7 @@ function EventForm({ onSubmit, isAdmin, auth }) {
             }
 
             if (isAdmin) {
-                setTenantId('');
+                setTenantId(defaultTenantId || '');
             }
             setEventType('tokens');
             setAmount('');
@@ -514,7 +540,9 @@ function EventForm({ onSubmit, isAdmin, auth }) {
 
 function Dashboard({ auth, onUnauthorized }) {
     const [events, setEvents] = useState([]);
+    const [tenants, setTenants] = useState([]);
     const [tenantSummary, setTenantSummary] = useState(null);
+    const [selectedAdminTenantId, setSelectedAdminTenantId] = useState('');
     const [loading, setLoading] = useState(true);
 
     const isAdmin = auth?.user?.role === 'admin';
@@ -529,17 +557,23 @@ function Dashboard({ auth, onUnauthorized }) {
                 api.get('/v1/tenants', { headers }),
             ]);
 
-            setEvents(eventsResponse.data.events);
+            const fetchedEvents = eventsResponse.data.events || [];
+            const fetchedTenants = tenantsResponse.data.tenants || [];
+
+            setEvents(fetchedEvents);
+            setTenants(fetchedTenants);
 
             if (isAdmin) {
-                const firstTenant = tenantsResponse.data.tenants?.[0] || null;
-                setTenantSummary(firstTenant);
+                const selectedTenant =
+                    fetchedTenants.find((tenant) => tenant.tenant_id === selectedAdminTenantId) ||
+                    fetchedTenants[0] ||
+                    null;
+
+                setTenantSummary(selectedTenant);
+                setSelectedAdminTenantId(selectedTenant?.tenant_id || '');
             } else {
-                const myTenantId = auth?.user?.tenant_id;
                 const myTenant =
-                    tenantsResponse.data.tenants?.find(
-                        (tenant) => tenant.tenant_id === myTenantId,
-                    ) || null;
+                    fetchedTenants.find((tenant) => tenant.tenant_id === tenantScopedId) || null;
                 setTenantSummary(myTenant);
             }
         } catch (error) {
@@ -556,6 +590,15 @@ function Dashboard({ auth, onUnauthorized }) {
         fetchDashboardData();
     }, []);
 
+    useEffect(() => {
+        if (!isAdmin) return;
+
+        const selectedTenant =
+            tenants.find((tenant) => tenant.tenant_id === selectedAdminTenantId) || null;
+
+        setTenantSummary(selectedTenant);
+    }, [isAdmin, tenants, selectedAdminTenantId]);
+
     const handleCreateEvent = async (payload, allowOverage) => {
         try {
             const response = await api.post(
@@ -569,17 +612,34 @@ function Dashboard({ auth, onUnauthorized }) {
             if (!response.data.idempotency_replayed) {
                 setEvents((prev) => [response.data, ...prev]);
 
-                setTenantSummary((prev) => {
-                    if (!prev) return prev;
-                    if (prev.tenant_id !== response.data.tenant_id) return prev;
+                if (response.data.event_type === 'tokens') {
+                    setTenants((prevTenants) =>
+                        prevTenants.map((tenant) =>
+                            tenant.tenant_id === response.data.tenant_id
+                                ? {
+                                      ...tenant,
+                                      month_to_date_usage:
+                                          Number(tenant.month_to_date_usage || 0) +
+                                          Number(response.data.amount),
+                                      last_activity_at: response.data.timestamp,
+                                  }
+                                : tenant,
+                        ),
+                    );
 
-                    return {
-                        ...prev,
-                        month_to_date_usage:
-                            Number(prev.month_to_date_usage || 0) + Number(response.data.amount),
-                        last_activity_at: response.data.timestamp,
-                    };
-                });
+                    setTenantSummary((prev) => {
+                        if (!prev) return prev;
+                        if (prev.tenant_id !== response.data.tenant_id) return prev;
+
+                        return {
+                            ...prev,
+                            month_to_date_usage:
+                                Number(prev.month_to_date_usage || 0) +
+                                Number(response.data.amount),
+                            last_activity_at: response.data.timestamp,
+                        };
+                    });
+                }
             }
 
             return {
@@ -606,8 +666,8 @@ function Dashboard({ auth, onUnauthorized }) {
         }
     };
 
-    const totalUsed = tenantSummary?.month_to_date_usage ?? 0;
-    const totalQuota = tenantSummary?.configured_monthly_quota ?? 0;
+    const tokenUsed = tenantSummary?.month_to_date_usage ?? 0;
+    const tokenQuota = tenantSummary?.configured_monthly_quota ?? 0;
 
     const dashboardTitle = isAdmin
         ? 'Admin Dashboard View'
@@ -623,10 +683,40 @@ function Dashboard({ auth, onUnauthorized }) {
                 <h1 className="dashboard-page-title">{dashboardTitle}</h1>
                 <p className="dashboard-page-subtitle">{dashboardSubtitle}</p>
             </div>
+            {/* 
+            {isAdmin && tenants.length > 0 && (
+                <div className="dashboard-admin-tenant-picker">
+                    <label className="dashboard-form-label" htmlFor="admin-tenant-select">
+                        Selected Tenant
+                    </label>
+                    <select
+                        id="admin-tenant-select"
+                        value={selectedAdminTenantId}
+                        onChange={(e) => setSelectedAdminTenantId(e.target.value)}>
+                        {tenants.map((tenant) => (
+                            <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                                {tenant.tenant_id}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )} */}
 
             <div className="tenant-dashboard-top">
-                <TokenCard used={totalUsed} total={totalQuota} />
-                <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} auth={auth} />
+                <TokenCard
+                    used={tokenUsed}
+                    total={tokenQuota}
+                    isAdmin={isAdmin}
+                    tenants={tenants}
+                    selectedTenantId={selectedAdminTenantId}
+                    onTenantChange={setSelectedAdminTenantId}
+                />
+                <EventForm
+                    onSubmit={handleCreateEvent}
+                    isAdmin={isAdmin}
+                    auth={auth}
+                    defaultTenantId={isAdmin ? selectedAdminTenantId : tenantScopedId || ''}
+                />
             </div>
 
             <section className="usage-history-section">
