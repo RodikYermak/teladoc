@@ -246,12 +246,28 @@ FAKE_USERS = [
         "tenant_id": None,
     },
     {
-        "username": "tenant",
-        "email": "tenant@teladoc.com",
+        "username": "tenant1",
+        "email": "tenant1@teladoc.com",
         "password": "password123",
         "role": "tenant",
-        "display_name": "Tenant User",
+        "display_name": "Tenant 1 User",
         "tenant_id": str(TENANT_1),
+    },
+    {
+        "username": "tenant2",
+        "email": "tenant2@teladoc.com",
+        "password": "password123",
+        "role": "tenant",
+        "display_name": "Tenant 2 User",
+        "tenant_id": str(TENANT_2),
+    },
+    {
+        "username": "tenant3",
+        "email": "tenant3@teladoc.com",
+        "password": "password123",
+        "role": "tenant",
+        "display_name": "Tenant 3 User",
+        "tenant_id": str(TENANT_3),
     },
 ]
 

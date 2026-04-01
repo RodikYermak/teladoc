@@ -763,3 +763,19 @@ small {
         padding: 8px 14px;
     }
 }
+
+.dashboard-heading-block {
+    margin-bottom: 20px;
+}
+
+.dashboard-page-title {
+    margin: 0 0 6px;
+    font-size: 32px;
+    font-weight: 700;
+}
+
+.dashboard-page-subtitle {
+    margin: 0;
+    color: #6b7280;
+    font-size: 15px;
+}

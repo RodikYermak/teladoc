@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     BrowserRouter as Router,
     Routes,
@@ -216,7 +216,9 @@ function LoginPage({ onLogin }) {
                 <div className="login-demo-box">
                     <strong>Demo users</strong>
                     <div>admin / password123</div>
-                    <div>tenant / password123</div>
+                    <div>tenant1 / password123</div>
+                    <div>tenant2 / password123</div>
+                    <div>tenant3 / password123</div>
                 </div>
             </div>
         </div>
@@ -514,6 +516,7 @@ function Dashboard({ auth, onUnauthorized }) {
     const [loading, setLoading] = useState(true);
 
     const isAdmin = auth?.user?.role === 'admin';
+    const tenantScopedId = auth?.user?.tenant_id || null;
 
     const fetchDashboardData = async () => {
         try {
@@ -607,8 +610,21 @@ function Dashboard({ auth, onUnauthorized }) {
     const tokenUsed = tenantSummary?.month_to_date_usage ?? 0;
     const tokenQuota = tenantSummary?.configured_monthly_quota ?? 0;
 
+    const dashboardTitle = isAdmin
+        ? 'Admin Dashboard View'
+        : `${auth?.user?.display_name || 'Tenant'} Dashboard`;
+
+    const dashboardSubtitle = isAdmin
+        ? 'Viewing platform-wide access with tenant management controls.'
+        : `Logged in for tenant ${tenantScopedId}`;
+
     return (
         <div className="tenant-dashboard">
+            <div className="dashboard-heading-block">
+                <h1 className="dashboard-page-title">{dashboardTitle}</h1>
+                <p className="dashboard-page-subtitle">{dashboardSubtitle}</p>
+            </div>
+
             <div className="tenant-dashboard-top">
                 <TokenCard used={tokenUsed} total={tokenQuota} />
                 <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} auth={auth} />
