@@ -90,33 +90,58 @@ import json
 import uvicorn
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
-from fastapi import FastAPI, Header, HTTPException, Query, Response, status
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 
+from fastapi import FastAPI, Header, HTTPException, Query, Response, status, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
-class EventCreate(BaseModel):
+
+MAX_EVENT_AMOUNT = 1_000_000_000
+MAX_IDEMPOTENCY_KEY_LENGTH = 100
+MAX_REASON_LENGTH = 200
+MIN_REASON_LENGTH = 10
+
+
+class StrictBaseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ErrorResponse(StrictBaseModel):
+    code: str
+    message: str
+    details: Optional[list | dict | str] = None
+
+
+class EventCreate(StrictBaseModel):
     tenant_id: UUID
     event_type: Literal["tokens", "inference_seconds"]
-    amount: int = Field(gt=0)
-    idempotency_key: str = Field(min_length=1, max_length=100)
+    amount: int = Field(gt=0, le=MAX_EVENT_AMOUNT)
+    idempotency_key: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_LENGTH)
     timestamp: Optional[datetime] = None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("idempotency_key cannot be empty or whitespace")
+        return trimmed
 
     @field_validator("timestamp")
     @classmethod
     def normalize_timestamp(cls, value: Optional[datetime]) -> Optional[datetime]:
         if value is None:
             return value
-
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
-
         return value.astimezone(timezone.utc)
 
 
-class Event(BaseModel):
+class Event(StrictBaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     tenant_id: UUID
     event_type: Literal["tokens", "inference_seconds"]
@@ -126,46 +151,46 @@ class Event(BaseModel):
     idempotency_replayed: bool = False
 
 
-class EventsResponse(BaseModel):
+class EventsResponse(StrictBaseModel):
     events: List[Event]
 
 
-class TenantRecord(BaseModel):
+class TenantRecord(StrictBaseModel):
     tenant_id: UUID
-    configured_monthly_quota: int = Field(gt=0)
+    configured_monthly_quota: int = Field(gt=0, le=MAX_EVENT_AMOUNT)
 
 
-class TenantSummary(BaseModel):
+class TenantSummary(StrictBaseModel):
     tenant_id: UUID
     configured_monthly_quota: int
     month_to_date_usage: int
     last_activity_at: Optional[datetime] = None
 
 
-class TenantsResponse(BaseModel):
+class TenantsResponse(StrictBaseModel):
     tenants: List[TenantSummary]
 
 
-class QuotaUpdateRequest(BaseModel):
-    new_monthly_quota: int = Field(gt=0)
-    reason: str = Field(min_length=10, max_length=200)
+class QuotaUpdateRequest(StrictBaseModel):
+    new_monthly_quota: int = Field(gt=0, le=MAX_EVENT_AMOUNT)
+    reason: str = Field(min_length=MIN_REASON_LENGTH, max_length=MAX_REASON_LENGTH)
 
     @field_validator("reason")
     @classmethod
     def validate_reason(cls, value: str) -> str:
         trimmed = value.strip()
-        if len(trimmed) < 10:
-            raise ValueError("reason must be at least 10 non-space characters")
+        if len(trimmed) < MIN_REASON_LENGTH:
+            raise ValueError(f"reason must be at least {MIN_REASON_LENGTH} non-space characters")
         return trimmed
 
 
-class QuotaUpdateResponse(BaseModel):
+class QuotaUpdateResponse(StrictBaseModel):
     tenant_id: UUID
     configured_monthly_quota: int
     updated_at: datetime
 
 
-class AuditRecord(BaseModel):
+class AuditRecord(StrictBaseModel):
     audit_id: UUID = Field(default_factory=uuid4)
     tenant_id: UUID
     action: Literal["quota_updated"]
@@ -176,18 +201,18 @@ class AuditRecord(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class AuditResponse(BaseModel):
+class AuditResponse(StrictBaseModel):
     records: List[AuditRecord]
 
 
-class UsageBucket(BaseModel):
+class UsageBucket(StrictBaseModel):
     bucket_start: datetime
     bucket_end: datetime
     amount: int
 
 
-class TenantUsageResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+class TenantUsageResponse(StrictBaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     tenant_id: UUID
     from_: datetime = Field(alias="from")
@@ -227,9 +252,69 @@ memory_db = {
 }
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    details = []
+    for err in exc.errors():
+        loc = [str(part) for part in err.get("loc", []) if part != "body"]
+        field = ".".join(loc) if loc else "request"
+        details.append({
+            "field": field,
+            "message": err.get("msg", "Invalid value"),
+            "type": err.get("type", "validation_error"),
+        })
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": "validation_error",
+            "message": "One or more inputs are invalid.",
+            "details": details,
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict):
+        code = exc.detail.get("code", "http_error")
+        message = exc.detail.get("message", "Request failed.")
+        details = exc.detail.get("details")
+        payload = {"code": code, "message": message}
+        if details is not None:
+            payload["details"] = details
+        for key, value in exc.detail.items():
+            if key not in payload and key not in {"code", "message", "details"}:
+                payload[key] = value
+        return JSONResponse(status_code=exc.status_code, content=payload)
+
+    if isinstance(exc.detail, str):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "code": "http_error",
+                "message": exc.detail,
+            },
+        )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": "http_error",
+            "message": "Request failed.",
+        },
+    )
+
+
 def require_admin(x_admin: Optional[str]) -> str:
     if x_admin != "true":
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "admin_required",
+                "message": "Admin access required",
+            },
+        )
     return "admin@example.com"
 
 
@@ -241,21 +326,39 @@ def find_tenant_index(tenant_id: UUID) -> int:
     for idx, tenant in enumerate(memory_db["tenants"]):
         if tenant.tenant_id == tenant_id:
             return idx
-    raise HTTPException(status_code=404, detail="Tenant not found")
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "code": "tenant_not_found",
+            "message": "Tenant not found",
+        },
+    )
 
 
 def get_tenant_record(tenant_id: UUID) -> TenantRecord:
     for tenant in memory_db["tenants"]:
         if tenant.tenant_id == tenant_id:
             return tenant
-    raise HTTPException(status_code=404, detail="Tenant not found")
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "code": "tenant_not_found",
+            "message": "Tenant not found",
+        },
+    )
 
 
 def ensure_tenant_exists(tenant_id: UUID) -> None:
     for tenant in memory_db["tenants"]:
         if tenant.tenant_id == tenant_id:
             return
-    raise HTTPException(status_code=404, detail="Tenant not found")
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "code": "tenant_not_found",
+            "message": "Tenant not found",
+        },
+    )
 
 
 def parse_iso_datetime(value: str, field_name: str) -> datetime:
@@ -264,7 +367,10 @@ def parse_iso_datetime(value: str, field_name: str) -> datetime:
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid {field_name}. Use ISO 8601, for example 2026-03-01T00:00:00Z",
+            detail={
+                "code": "invalid_datetime",
+                "message": f"Invalid {field_name}. Use ISO 8601, for example 2026-03-01T00:00:00Z",
+            },
         )
 
     if parsed.tzinfo is None:
@@ -397,7 +503,10 @@ def create_usage_event(
         if existing["payload_hash"] != incoming_payload_hash:
             raise HTTPException(
                 status_code=409,
-                detail="Idempotency key already used with a different payload",
+                detail={
+                    "code": "idempotency_conflict",
+                    "message": "Idempotency key already used with a different payload",
+                },
             )
 
         response.status_code = status.HTTP_200_OK
@@ -548,10 +657,22 @@ def get_tenant_usage(
     to_dt = parse_iso_datetime(to, "to")
 
     if from_dt >= to_dt:
-        raise HTTPException(status_code=400, detail="'from' must be earlier than 'to'")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_date_range",
+                "message": "'from' must be earlier than 'to'",
+            },
+        )
 
     if granularity != "day":
-        raise HTTPException(status_code=400, detail="Only granularity=day is supported")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "unsupported_granularity",
+                "message": "Only granularity=day is supported",
+            },
+        )
 
     bucket_totals: dict[date, int] = defaultdict(int)
 

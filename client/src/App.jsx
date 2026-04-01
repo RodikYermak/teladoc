@@ -87,53 +87,60 @@ function EventForm({ onSubmit, onEventCreated }) {
 
     const buildFriendlyErrorMessage = (error) => {
         const status = error.response?.status;
-        const detail = error.response?.data?.detail;
+        const responseData = error.response?.data;
+        const code = responseData?.code;
+        const message = responseData?.message;
 
         if (!error.response) {
             return 'Cannot reach the server. Make sure the backend is running on http://localhost:8000.';
         }
 
-        if (status === 409 && detail?.code === 'quota_exceeded') {
-            const remaining = Number(detail.remaining_units ?? 0).toLocaleString();
-            const requested = Number(detail.requested_units ?? 0).toLocaleString();
-            const used = Number(detail.month_to_date_usage ?? 0).toLocaleString();
-            const quota = Number(detail.configured_monthly_quota ?? 0).toLocaleString();
+        if (status === 409 && code === 'quota_exceeded') {
+            const remaining = Number(responseData.remaining_units ?? 0).toLocaleString();
+            const requested = Number(responseData.requested_units ?? 0).toLocaleString();
+            const used = Number(responseData.month_to_date_usage ?? 0).toLocaleString();
+            const quota = Number(responseData.configured_monthly_quota ?? 0).toLocaleString();
 
             return (
                 `Quota exceeded. This event would go over the tenant's monthly limit. ` +
                 `Remaining units: ${remaining}. Requested units: ${requested}. ` +
                 `Month-to-date usage: ${used} of ${quota}. ` +
-                (detail.allow_overage_available_for_admin
+                (responseData.allow_overage_available_for_admin
                     ? 'An admin can retry with overage override enabled.'
                     : '')
             );
         }
 
-        if (status === 409 && typeof detail === 'string') {
-            return `Conflict: ${detail}`;
+        if (status === 409 && code === 'idempotency_conflict') {
+            return `Conflict: ${message}`;
         }
 
-        if (status === 404) {
+        if (status === 404 && code === 'tenant_not_found') {
             return 'Tenant not found. Please check the Tenant ID and try again.';
         }
 
-        if (status === 403) {
+        if (status === 403 && code === 'admin_required') {
             return 'You are not allowed to perform this action. Admin access is required for overage override.';
         }
 
-        if (status === 422 && Array.isArray(error.response?.data?.detail)) {
-            const messages = error.response.data.detail
-                .map((item) => {
-                    const field = item.loc?.[item.loc.length - 1];
-                    return field ? `${field}: ${item.msg}` : item.msg;
-                })
+        if (status === 400 && code === 'event_timestamp_in_future') {
+            return 'Invalid timestamp. Event timestamp cannot be more than 5 minutes in the future.';
+        }
+
+        if (status === 400 && code === 'event_timestamp_too_old') {
+            return 'Invalid timestamp. Event timestamp cannot be more than 30 days in the past.';
+        }
+
+        if (status === 422 && Array.isArray(responseData?.details)) {
+            const messages = responseData.details
+                .map((item) => `${item.field}: ${item.message}`)
                 .join('; ');
 
             return `Invalid input. ${messages}`;
         }
 
-        if (typeof detail === 'string' && detail.trim()) {
-            return detail;
+        if (typeof message === 'string' && message.trim()) {
+            return message;
         }
 
         return `Failed to create event. Server returned status ${status}.`;
@@ -196,20 +203,22 @@ function EventForm({ onSubmit, onEventCreated }) {
                             `Month-to-date usage: ${used} of ${quota}. ` +
                             (result.allowOverageAvailableForAdmin
                                 ? 'An admin can retry with overage override enabled.'
-                                : '')
+                                : ''),
                     );
                 } else if (result.errorType === 'conflict') {
                     setErrorMessage(
                         result.message ||
-                            'Conflict detected. This idempotency key may already have been used with a different payload.'
+                            'Conflict detected. This idempotency key may already have been used with a different payload.',
                     );
                 } else if (result.errorType === 'not_found') {
                     setErrorMessage(result.message || 'Tenant not found.');
                 } else if (result.errorType === 'validation') {
                     setErrorMessage(result.message || 'Invalid input.');
+                } else if (result.errorType === 'invalid_timestamp') {
+                    setErrorMessage(result.message || 'Invalid timestamp.');
                 } else {
                     setErrorMessage(
-                        result.message || 'Failed to create event for an unknown reason.'
+                        result.message || 'Failed to create event for an unknown reason.',
                     );
                 }
                 return;
@@ -217,7 +226,7 @@ function EventForm({ onSubmit, onEventCreated }) {
 
             if (result.replayed) {
                 setMessage(
-                    'Duplicate request detected. Existing event was returned, and usage was not counted twice.'
+                    'Duplicate request detected. Existing event was returned, and usage was not counted twice.',
                 );
             } else {
                 setMessage('Event created successfully.');
@@ -322,30 +331,32 @@ function Dashboard() {
             };
         } catch (error) {
             const status = error.response?.status;
-            const detail = error.response?.data?.detail;
+            const responseData = error.response?.data;
+            const code = responseData?.code;
+            const message = responseData?.message;
 
-            if (status === 409 && detail?.code === 'quota_exceeded') {
+            if (status === 409 && code === 'quota_exceeded') {
                 return {
                     ok: false,
                     errorType: 'quota_exceeded',
-                    message: detail.message,
-                    remainingUnits: detail.remaining_units,
-                    configuredQuota: detail.configured_monthly_quota,
-                    monthToDateUsage: detail.month_to_date_usage,
-                    requestedUnits: detail.requested_units,
-                    allowOverageAvailableForAdmin: detail.allow_overage_available_for_admin,
+                    message,
+                    remainingUnits: responseData.remaining_units,
+                    configuredQuota: responseData.configured_monthly_quota,
+                    monthToDateUsage: responseData.month_to_date_usage,
+                    requestedUnits: responseData.requested_units,
+                    allowOverageAvailableForAdmin: responseData.allow_overage_available_for_admin,
                 };
             }
 
-            if (status === 409) {
+            if (status === 409 && code === 'idempotency_conflict') {
                 return {
                     ok: false,
                     errorType: 'conflict',
-                    message: typeof detail === 'string' ? detail : 'Conflict error.',
+                    message: message || 'Conflict error.',
                 };
             }
 
-            if (status === 404) {
+            if (status === 404 && code === 'tenant_not_found') {
                 return {
                     ok: false,
                     errorType: 'not_found',
@@ -353,15 +364,28 @@ function Dashboard() {
                 };
             }
 
+            if (status === 400 && code === 'event_timestamp_in_future') {
+                return {
+                    ok: false,
+                    errorType: 'invalid_timestamp',
+                    message: 'Event timestamp cannot be more than 5 minutes in the future.',
+                };
+            }
+
+            if (status === 400 && code === 'event_timestamp_too_old') {
+                return {
+                    ok: false,
+                    errorType: 'invalid_timestamp',
+                    message: 'Event timestamp cannot be more than 30 days in the past.',
+                };
+            }
+
             if (status === 422) {
-                const messages = Array.isArray(error.response?.data?.detail)
-                    ? error.response.data.detail
-                          .map((item) => {
-                              const field = item.loc?.[item.loc.length - 1];
-                              return field ? `${field}: ${item.msg}` : item.msg;
-                          })
+                const messages = Array.isArray(responseData?.details)
+                    ? responseData.details
+                          .map((item) => `${item.field}: ${item.message}`)
                           .join('; ')
-                    : 'Validation error.';
+                    : message || 'Validation error.';
 
                 return {
                     ok: false,
@@ -374,8 +398,8 @@ function Dashboard() {
                 ok: false,
                 errorType: 'unknown',
                 message:
-                    typeof detail === 'string' && detail.trim()
-                        ? detail
+                    typeof message === 'string' && message.trim()
+                        ? message
                         : 'Failed to create event.',
             };
         }
@@ -387,11 +411,7 @@ function Dashboard() {
             .reduce((sum, event) => sum + event.amount, 0);
     }, [events]);
 
-    const latestTokenEvent = [...events]
-        .filter((event) => event.event_type === 'tokens')
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
-
-    const tokenQuota = latestTokenEvent?.tenant_quota_snapshot ?? 1200000;
+    const tokenQuota = 1200000;
 
     return (
         <div className="container">
@@ -493,7 +513,7 @@ function AdminPage() {
                     headers: {
                         'x-admin': 'true',
                     },
-                }
+                },
             );
 
             await Promise.all([fetchTenants(), fetchAuditLogs()]);
@@ -501,13 +521,15 @@ function AdminPage() {
         } catch (err) {
             console.error('Error updating tenant quota:', err.response?.data || err);
 
-            if (err.response?.status === 422 && Array.isArray(err.response?.data?.detail)) {
-                const message = err.response.data.detail.map((item) => item.msg).join('; ');
+            if (err.response?.status === 422 && Array.isArray(err.response?.data?.details)) {
+                const message = err.response.data.details
+                    .map((item) => `${item.field}: ${item.message}`)
+                    .join('; ');
                 alert(`Invalid request: ${message}`);
                 return;
             }
 
-            alert(err.response?.data?.detail || 'Failed to update quota.');
+            alert(err.response?.data?.message || 'Failed to update quota.');
         } finally {
             setUpdating(false);
         }
@@ -531,8 +553,7 @@ function AdminPage() {
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         marginBottom: '16px',
-                    }}
-                >
+                    }}>
                     <h2>Admin View</h2>
                     <button className="edit-btn" onClick={loadAdminData}>
                         Refresh
@@ -551,8 +572,7 @@ function AdminPage() {
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     marginBottom: '16px',
-                }}
-            >
+                }}>
                 <h2>Admin View</h2>
                 <button className="edit-btn" onClick={loadAdminData}>
                     Refresh
@@ -675,15 +695,13 @@ function AdminPage() {
                             <button
                                 className="btn-discard"
                                 onClick={closeModal}
-                                disabled={updating}
-                            >
+                                disabled={updating}>
                                 Discard
                             </button>
                             <button
                                 className="btn-update"
                                 onClick={updateTenant}
-                                disabled={updating}
-                            >
+                                disabled={updating}>
                                 {updating ? 'Updating...' : 'Update'}
                             </button>
                         </div>
