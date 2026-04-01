@@ -85,12 +85,14 @@
 # if __name__ == "__main__":
 #     uvicorn.run(app, host="0.0.0.0", port=8000)
 
+import hashlib
+import json
 import uvicorn
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 
@@ -99,6 +101,7 @@ class EventCreate(BaseModel):
     tenant_id: UUID
     event_type: Literal["tokens", "inference_seconds"]
     amount: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100)
 
 
 class Event(BaseModel):
@@ -106,7 +109,9 @@ class Event(BaseModel):
     tenant_id: UUID
     event_type: Literal["tokens", "inference_seconds"]
     amount: int
+    idempotency_key: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    idempotency_replayed: bool = False
 
 
 class EventsResponse(BaseModel):
@@ -162,14 +167,13 @@ class UsageBucket(BaseModel):
 
 
 class TenantUsageResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     tenant_id: UUID
     from_: datetime = Field(alias="from")
     to: datetime
     granularity: Literal["day"]
     buckets: List[UsageBucket]
-
-    class Config:
-        populate_by_name = True
 
 
 app = FastAPI(debug=True)
@@ -199,6 +203,7 @@ memory_db = {
         ),
     ],
     "audit_logs": [],
+    "idempotency_index": {},
 }
 
 
@@ -239,14 +244,17 @@ def parse_iso_datetime(value: str, field_name: str) -> datetime:
     return parsed
 
 
-def check_db_connectivity() -> dict:
-    """
-    Placeholder DB readiness check.
+def make_payload_hash(tenant_id: UUID, event_type: str, amount: int) -> str:
+    normalized_payload = {
+        "tenant_id": str(tenant_id),
+        "event_type": event_type,
+        "amount": amount,
+    }
+    raw = json.dumps(normalized_payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
-    Right now this app uses in-memory storage, so there is no external DB
-    connection to verify. When you add Postgres/SQLite/etc, replace this
-    function with a real ping/query.
-    """
+
+def check_db_connectivity() -> dict:
     return {
         "configured": False,
         "status": "not_configured",
@@ -266,11 +274,8 @@ def health():
 @app.get("/ready")
 def ready():
     db_status = check_db_connectivity()
-
-    is_ready = True
-
     return {
-        "status": "ready" if is_ready else "not_ready",
+        "status": "ready",
         "service": "usage-api",
         "time": datetime.now(timezone.utc),
         "checks": {
@@ -284,16 +289,54 @@ def list_usage_events():
     return {"events": memory_db["events"]}
 
 
-@app.post("/v1/usage/events", response_model=Event, status_code=201)
-def create_usage_event(event: EventCreate):
+@app.post("/v1/usage/events", response_model=Event)
+def create_usage_event(event: EventCreate, response: Response):
     ensure_tenant_exists(event.tenant_id)
+
+    idempotency_key = (str(event.tenant_id), event.idempotency_key)
+    incoming_payload_hash = make_payload_hash(
+        tenant_id=event.tenant_id,
+        event_type=event.event_type,
+        amount=event.amount,
+    )
+
+    existing = memory_db["idempotency_index"].get(idempotency_key)
+    if existing:
+        if existing["payload_hash"] != incoming_payload_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key already used with a different payload",
+            )
+
+        response.status_code = status.HTTP_200_OK
+        response.headers["X-Idempotent-Replay"] = "true"
+
+        stored_event: Event = existing["event"]
+        return Event(
+            event_id=stored_event.event_id,
+            tenant_id=stored_event.tenant_id,
+            event_type=stored_event.event_type,
+            amount=stored_event.amount,
+            idempotency_key=stored_event.idempotency_key,
+            timestamp=stored_event.timestamp,
+            idempotency_replayed=True,
+        )
 
     new_event = Event(
         tenant_id=event.tenant_id,
         event_type=event.event_type,
         amount=event.amount,
+        idempotency_key=event.idempotency_key,
     )
+
     memory_db["events"].append(new_event)
+    memory_db["idempotency_index"][idempotency_key] = {
+        "payload_hash": incoming_payload_hash,
+        "event": new_event,
+    }
+
+    response.status_code = status.HTTP_201_CREATED
+    response.headers["X-Idempotent-Replay"] = "false"
     return new_event
 
 
@@ -306,8 +349,7 @@ def list_tenants():
 
     for tenant in memory_db["tenants"]:
         tenant_events = [
-            event for event in memory_db["events"]
-            if event.tenant_id == tenant.tenant_id
+            event for event in memory_db["events"] if event.tenant_id == tenant.tenant_id
         ]
 
         month_to_date_usage = sum(

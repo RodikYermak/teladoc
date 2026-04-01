@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
 
+function generateIdempotencyKey() {
+    return crypto.randomUUID();
+}
+
 export default function EventForm({ onSubmit }) {
     const [tenantId, setTenantId] = useState('');
-    const [eventType, setEventType] = useState('tokens');
+    const [type, setType] = useState('tokens');
     const [amount, setAmount] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
@@ -16,16 +20,22 @@ export default function EventForm({ onSubmit }) {
         try {
             await onSubmit({
                 tenant_id: tenantId,
-                event_type: eventType,
+                event_type: type,
                 amount: Number(amount),
+                idempotency_key: generateIdempotencyKey(),
             });
 
             setTenantId('');
-            setEventType('tokens');
+            setType('tokens');
             setAmount('');
         } catch (error) {
             console.error(error);
-            alert('Failed to create event. Make sure Tenant ID is a valid UUID.');
+
+            if (error.response?.status === 409) {
+                alert('Duplicate event with different payload detected.');
+            } else {
+                alert('Failed to create event.');
+            }
         } finally {
             setSubmitting(false);
         }
@@ -42,7 +52,7 @@ export default function EventForm({ onSubmit }) {
                 onChange={(e) => setTenantId(e.target.value)}
             />
 
-            <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
+            <select value={type} onChange={(e) => setType(e.target.value)}>
                 <option value="tokens">tokens</option>
                 <option value="inference_seconds">inference_seconds</option>
             </select>
