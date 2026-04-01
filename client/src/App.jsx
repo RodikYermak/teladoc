@@ -426,7 +426,7 @@ function EventForm({ onSubmit, isAdmin, auth }) {
         };
 
         try {
-            let result = await onSubmit(payload, allowOverage);
+            const result = await onSubmit(payload, allowOverage);
 
             if (!result.ok) {
                 setErrorMessage(result.message || 'Failed to create event.');
@@ -510,28 +510,45 @@ function EventForm({ onSubmit, isAdmin, auth }) {
 
 function Dashboard({ auth, onUnauthorized }) {
     const [events, setEvents] = useState([]);
+    const [tenantSummary, setTenantSummary] = useState(null);
     const [loading, setLoading] = useState(true);
 
     const isAdmin = auth?.user?.role === 'admin';
 
-    const fetchEvents = async () => {
+    const fetchDashboardData = async () => {
         try {
-            const response = await api.get('/v1/usage/events', {
-                headers: buildAuthHeaders(auth),
-            });
-            setEvents(response.data.events);
+            const headers = buildAuthHeaders(auth);
+
+            const [eventsResponse, tenantsResponse] = await Promise.all([
+                api.get('/v1/usage/events', { headers }),
+                api.get('/v1/tenants', { headers }),
+            ]);
+
+            setEvents(eventsResponse.data.events);
+
+            if (isAdmin) {
+                const firstTenant = tenantsResponse.data.tenants?.[0] || null;
+                setTenantSummary(firstTenant);
+            } else {
+                const myTenantId = auth?.user?.tenant_id;
+                const myTenant =
+                    tenantsResponse.data.tenants?.find(
+                        (tenant) => tenant.tenant_id === myTenantId,
+                    ) || null;
+                setTenantSummary(myTenant);
+            }
         } catch (error) {
             if (error.response?.status === 401) {
                 onUnauthorized();
             }
-            console.error('Error fetching events:', error);
+            console.error('Error fetching dashboard data:', error);
         } finally {
             setLoading(false);
         }
     };
 
     useEffect(() => {
-        fetchEvents();
+        fetchDashboardData();
     }, []);
 
     const handleCreateEvent = async (payload, allowOverage) => {
@@ -546,6 +563,21 @@ function Dashboard({ auth, onUnauthorized }) {
 
             if (!response.data.idempotency_replayed) {
                 setEvents((prev) => [response.data, ...prev]);
+
+                if (response.data.event_type === 'tokens') {
+                    setTenantSummary((prev) => {
+                        if (!prev) return prev;
+                        if (prev.tenant_id !== response.data.tenant_id) return prev;
+
+                        return {
+                            ...prev,
+                            month_to_date_usage:
+                                Number(prev.month_to_date_usage || 0) +
+                                Number(response.data.amount),
+                            last_activity_at: response.data.timestamp,
+                        };
+                    });
+                }
             }
 
             return {
@@ -572,13 +604,8 @@ function Dashboard({ auth, onUnauthorized }) {
         }
     };
 
-    const tokenUsed = useMemo(() => {
-        return events
-            .filter((event) => event.event_type === 'tokens')
-            .reduce((sum, event) => sum + event.amount, 0);
-    }, [events]);
-
-    const tokenQuota = 1200000;
+    const tokenUsed = tenantSummary?.month_to_date_usage ?? 0;
+    const tokenQuota = tenantSummary?.configured_monthly_quota ?? 0;
 
     return (
         <div className="tenant-dashboard">
