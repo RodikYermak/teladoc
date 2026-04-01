@@ -86,7 +86,7 @@
 #     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
@@ -128,6 +128,32 @@ class TenantsResponse(BaseModel):
     tenants: List[TenantSummary]
 
 
+class QuotaUpdateRequest(BaseModel):
+    new_monthly_quota: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=200)
+
+
+class QuotaUpdateResponse(BaseModel):
+    tenant_id: UUID
+    configured_monthly_quota: int
+    updated_at: datetime
+
+
+class AuditRecord(BaseModel):
+    audit_id: UUID = Field(default_factory=uuid4)
+    tenant_id: UUID
+    action: Literal["quota_updated"]
+    old_value: int
+    new_value: int
+    reason: str
+    actor: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AuditResponse(BaseModel):
+    records: List[AuditRecord]
+
+
 app = FastAPI(debug=True)
 
 app.add_middleware(
@@ -154,23 +180,26 @@ memory_db = {
             configured_monthly_quota=500000,
         ),
     ],
+    "audit_logs": [],
 }
 
 
-@app.get("/events", response_model=EventsResponse)
-def get_events():
+def require_admin(x_admin: Optional[str]) -> str:
+    if x_admin != "true":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return "admin@example.com"
+
+
+def find_tenant_index(tenant_id: UUID) -> int:
+    for idx, tenant in enumerate(memory_db["tenants"]):
+        if tenant.tenant_id == tenant_id:
+            return idx
+    raise HTTPException(status_code=404, detail="Tenant not found")
+
+
+@app.get("/v1/usage/events", response_model=EventsResponse)
+def list_usage_events():
     return {"events": memory_db["events"]}
-
-
-@app.post("/events", response_model=Event)
-def add_event(event: EventCreate):
-    new_event = Event(
-        tenant_id=event.tenant_id,
-        event_type=event.event_type,
-        amount=event.amount,
-    )
-    memory_db["events"].append(new_event)
-    return new_event
 
 
 @app.post("/v1/usage/events", response_model=Event, status_code=201)
@@ -182,11 +211,6 @@ def create_usage_event(event: EventCreate):
     )
     memory_db["events"].append(new_event)
     return new_event
-
-
-@app.get("/v1/usage/events", response_model=EventsResponse)
-def list_usage_events():
-    return {"events": memory_db["events"]}
 
 
 @app.get("/v1/tenants", response_model=TenantsResponse)
@@ -205,7 +229,7 @@ def list_tenants():
         month_to_date_usage = sum(
             event.amount
             for event in tenant_events
-            if event.timestamp >= month_start
+            if event.timestamp >= month_start and event.event_type == "tokens"
         )
 
         last_activity_at = None
@@ -222,6 +246,49 @@ def list_tenants():
         )
 
     return {"tenants": tenant_summaries}
+
+
+@app.put("/v1/tenants/{tenant_id}/quota", response_model=QuotaUpdateResponse)
+def update_tenant_quota(
+    tenant_id: UUID,
+    payload: QuotaUpdateRequest,
+    x_admin: Optional[str] = Header(default=None),
+):
+    actor = require_admin(x_admin)
+
+    tenant_index = find_tenant_index(tenant_id)
+    tenant = memory_db["tenants"][tenant_index]
+
+    old_quota = tenant.configured_monthly_quota
+    new_quota = payload.new_monthly_quota
+
+    updated_tenant = TenantRecord(
+        tenant_id=tenant.tenant_id,
+        configured_monthly_quota=new_quota,
+    )
+    memory_db["tenants"][tenant_index] = updated_tenant
+
+    audit_record = AuditRecord(
+        tenant_id=tenant_id,
+        action="quota_updated",
+        old_value=old_quota,
+        new_value=new_quota,
+        reason=payload.reason,
+        actor=actor,
+    )
+    memory_db["audit_logs"].append(audit_record)
+
+    return QuotaUpdateResponse(
+        tenant_id=tenant_id,
+        configured_monthly_quota=new_quota,
+        updated_at=audit_record.timestamp,
+    )
+
+
+@app.get("/v1/audit", response_model=AuditResponse)
+def list_audit_logs(x_admin: Optional[str] = Header(default=None)):
+    require_admin(x_admin)
+    return {"records": memory_db["audit_logs"]}
 
 
 if __name__ == "__main__":

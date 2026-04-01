@@ -9,24 +9,28 @@ function formatDate(value) {
 export default function AdminPage() {
     const [tenants, setTenants] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [currentTenant, setCurrentTenant] = useState(null);
     const [newQuota, setNewQuota] = useState('');
     const [reason, setReason] = useState('');
+    const [updating, setUpdating] = useState(false);
+
+    const fetchTenants = async () => {
+        try {
+            setError('');
+            const response = await api.get('/v1/tenants');
+            setTenants(response.data.tenants);
+        } catch (err) {
+            console.error('Error fetching tenants:', err);
+            setError('Failed to load tenants.');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchTenants = async () => {
-            try {
-                const res = await api.get('/v1/tenants');
-                setTenants(res.data.tenants);
-            } catch (err) {
-                console.error('Error fetching tenants:', err);
-            } finally {
-                setLoading(false);
-            }
-        };
-
         fetchTenants();
     }, []);
 
@@ -38,25 +42,60 @@ export default function AdminPage() {
     };
 
     const closeModal = () => {
+        if (updating) return;
         setIsModalOpen(false);
         setCurrentTenant(null);
         setNewQuota('');
         setReason('');
     };
 
-    const updateTenant = () => {
+    const updateTenant = async () => {
         if (!currentTenant) return;
+        if (!newQuota || Number(newQuota) <= 0) {
+            alert('Please enter a valid quota.');
+            return;
+        }
+        if (!reason.trim()) {
+            alert('Please provide a reason.');
+            return;
+        }
 
-        // 🔥 For now: update locally (no backend yet)
-        setTenants((prev) =>
-            prev.map((t) =>
-                t.tenant_id === currentTenant.tenant_id
-                    ? { ...t, configured_monthly_quota: Number(newQuota) }
-                    : t,
-            ),
-        );
+        try {
+            setUpdating(true);
 
-        closeModal();
+            const response = await api.put(
+                `/v1/tenants/${currentTenant.tenant_id}/quota`,
+                {
+                    new_monthly_quota: Number(newQuota),
+                    reason: reason.trim(),
+                },
+                {
+                    headers: {
+                        'x-admin': 'true',
+                    },
+                },
+            );
+
+            const updatedQuota = response.data.configured_monthly_quota;
+
+            setTenants((prev) =>
+                prev.map((tenant) =>
+                    tenant.tenant_id === currentTenant.tenant_id
+                        ? {
+                              ...tenant,
+                              configured_monthly_quota: updatedQuota,
+                          }
+                        : tenant,
+                ),
+            );
+
+            closeModal();
+        } catch (err) {
+            console.error('Error updating tenant quota:', err.response?.data || err);
+            alert(err.response?.data?.detail || 'Failed to update quota.');
+        } finally {
+            setUpdating(false);
+        }
     };
 
     if (loading) {
@@ -68,38 +107,50 @@ export default function AdminPage() {
         );
     }
 
+    if (error) {
+        return (
+            <div className="admin-page">
+                <h2>Admin View</h2>
+                <p>{error}</p>
+            </div>
+        );
+    }
+
     return (
         <div className="admin-page">
             <h2>Admin View</h2>
 
-            <table className="tenant-table">
-                <thead>
-                    <tr>
-                        <th>Tenant ID</th>
-                        <th>Quota</th>
-                        <th>Used</th>
-                        <th>Last Activity</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {tenants.map((tenant) => (
-                        <tr key={tenant.tenant_id}>
-                            <td>{tenant.tenant_id}</td>
-                            <td>{tenant.configured_monthly_quota.toLocaleString()}</td>
-                            <td>{tenant.month_to_date_usage.toLocaleString()}</td>
-                            <td>{formatDate(tenant.last_activity_at)}</td>
-                            <td>
-                                <button className="edit-btn" onClick={() => openModal(tenant)}>
-                                    Edit
-                                </button>
-                            </td>
+            {!tenants.length ? (
+                <p>No tenants found.</p>
+            ) : (
+                <table className="tenant-table">
+                    <thead>
+                        <tr>
+                            <th>Tenant ID</th>
+                            <th>Monthly Quota</th>
+                            <th>Month-to-Date Usage</th>
+                            <th>Last Activity</th>
+                            <th></th>
                         </tr>
-                    ))}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        {tenants.map((tenant) => (
+                            <tr key={tenant.tenant_id}>
+                                <td>{tenant.tenant_id}</td>
+                                <td>{tenant.configured_monthly_quota.toLocaleString()}</td>
+                                <td>{tenant.month_to_date_usage.toLocaleString()}</td>
+                                <td>{formatDate(tenant.last_activity_at)}</td>
+                                <td>
+                                    <button className="edit-btn" onClick={() => openModal(tenant)}>
+                                        Edit
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
 
-            {/* 🔥 Modal */}
             {isModalOpen && currentTenant && (
                 <div className="overlay">
                     <div className="modal">
@@ -107,18 +158,23 @@ export default function AdminPage() {
 
                         <div className="field">
                             <label>Tenant</label>
-                            <input value={currentTenant.tenant_id} readOnly />
+                            <input type="text" value={currentTenant.tenant_id} readOnly />
                         </div>
 
                         <div className="field">
                             <label>Current Quota</label>
-                            <input value={currentTenant.configured_monthly_quota} readOnly />
+                            <input
+                                type="text"
+                                value={currentTenant.configured_monthly_quota.toLocaleString()}
+                                readOnly
+                            />
                         </div>
 
                         <div className="field">
                             <label>New Quota</label>
                             <input
                                 type="number"
+                                min="1"
                                 value={newQuota}
                                 onChange={(e) => setNewQuota(e.target.value)}
                             />
@@ -127,18 +183,26 @@ export default function AdminPage() {
                         <div className="field">
                             <label>Reason</label>
                             <input
+                                type="text"
                                 placeholder="Reason for change"
+                                maxLength={200}
                                 value={reason}
                                 onChange={(e) => setReason(e.target.value)}
                             />
                         </div>
 
                         <div className="actions">
-                            <button className="btn-discard" onClick={closeModal}>
+                            <button
+                                className="btn-discard"
+                                onClick={closeModal}
+                                disabled={updating}>
                                 Discard
                             </button>
-                            <button className="btn-update" onClick={updateTenant}>
-                                Update
+                            <button
+                                className="btn-update"
+                                onClick={updateTenant}
+                                disabled={updating}>
+                                {updating ? 'Updating...' : 'Update'}
                             </button>
                         </div>
                     </div>
