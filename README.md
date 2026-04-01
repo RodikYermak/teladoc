@@ -1,5 +1,11 @@
 # Teladoc Usage Dashboard
 
+
+
+https://github.com/user-attachments/assets/3d67da6e-5211-49b1-8d60-9c589d8d5cd2
+
+
+
 ## How to run locally
 
 From the project root, run:
