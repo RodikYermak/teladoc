@@ -1,5 +1,23 @@
 # Teladoc Usage Dashboard
 
+## How to run locally
+
+From the project root, run:
+
+```docker compose up --build```
+
+### That starts:
+- frontend on http://localhost:5173
+- backend on http://localhost:8000
+- postgres on localhost:5432
+
+### Demo credentials
+
+admin / password123
+tenant1 / password123
+tenant2 / password123
+tenant3 / password123
+
 ## Overview
 
 This project is a small full-stack tenant usage dashboard built with:
@@ -45,27 +63,6 @@ It supports:
 - frontend Vitest / React Testing Library component tests
 
 ---
-
-## How to run locally
-
-From the project root, run:
-
-
-```docker compose up --build```
-
-### That starts:
-- frontend on http://localhost:5173
-- backend on http://localhost:8000
-- postgres on localhost:5432
-
-### Demo credentials
-
-admin / password123
-tenant1 / password123
-tenant2 / password123
-tenant3 / password123
-
-
 ### Backend tests
 From server:
 ```pytest -q```
