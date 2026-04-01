@@ -86,12 +86,13 @@
 #     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta, date
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 from uuid import UUID, uuid4
-from datetime import datetime, timezone
 
 
 class EventCreate(BaseModel):
@@ -154,6 +155,23 @@ class AuditResponse(BaseModel):
     records: List[AuditRecord]
 
 
+class UsageBucket(BaseModel):
+    bucket_start: datetime
+    bucket_end: datetime
+    amount: int
+
+
+class TenantUsageResponse(BaseModel):
+    tenant_id: UUID
+    from_: datetime = Field(alias="from")
+    to: datetime
+    granularity: Literal["day"]
+    buckets: List[UsageBucket]
+
+    class Config:
+        populate_by_name = True
+
+
 app = FastAPI(debug=True)
 
 app.add_middleware(
@@ -197,6 +215,30 @@ def find_tenant_index(tenant_id: UUID) -> int:
     raise HTTPException(status_code=404, detail="Tenant not found")
 
 
+def ensure_tenant_exists(tenant_id: UUID) -> None:
+    for tenant in memory_db["tenants"]:
+        if tenant.tenant_id == tenant_id:
+            return
+    raise HTTPException(status_code=404, detail="Tenant not found")
+
+
+def parse_iso_datetime(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}. Use ISO 8601, for example 2026-03-01T00:00:00Z",
+        )
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+
+    return parsed
+
+
 @app.get("/v1/usage/events", response_model=EventsResponse)
 def list_usage_events():
     return {"events": memory_db["events"]}
@@ -204,6 +246,8 @@ def list_usage_events():
 
 @app.post("/v1/usage/events", response_model=Event, status_code=201)
 def create_usage_event(event: EventCreate):
+    ensure_tenant_exists(event.tenant_id)
+
     new_event = Event(
         tenant_id=event.tenant_id,
         event_type=event.event_type,
@@ -289,6 +333,83 @@ def update_tenant_quota(
 def list_audit_logs(x_admin: Optional[str] = Header(default=None)):
     require_admin(x_admin)
     return {"records": memory_db["audit_logs"]}
+
+
+@app.get("/v1/tenants/{tenant_id}/usage", response_model=TenantUsageResponse)
+def get_tenant_usage(
+    tenant_id: UUID,
+    from_: str = Query(..., alias="from"),
+    to: str = Query(...),
+    granularity: Literal["day"] = Query("day"),
+):
+    ensure_tenant_exists(tenant_id)
+
+    from_dt = parse_iso_datetime(from_, "from")
+    to_dt = parse_iso_datetime(to, "to")
+
+    if from_dt >= to_dt:
+        raise HTTPException(status_code=400, detail="'from' must be earlier than 'to'")
+
+    if granularity != "day":
+        raise HTTPException(status_code=400, detail="Only granularity=day is supported")
+
+    # Aggregate token usage into daily UTC buckets
+    bucket_totals: dict[date, int] = defaultdict(int)
+
+    for event in memory_db["events"]:
+        if event.tenant_id != tenant_id:
+            continue
+        if event.event_type != "tokens":
+            continue
+        if not (from_dt <= event.timestamp < to_dt):
+            continue
+
+        bucket_day = event.timestamp.astimezone(timezone.utc).date()
+        bucket_totals[bucket_day] += event.amount
+
+    # Build all daily buckets in range, including zero-usage days
+    current_day_start = datetime(
+        from_dt.year, from_dt.month, from_dt.day, tzinfo=timezone.utc
+    )
+    last_day_start = datetime(
+        to_dt.year, to_dt.month, to_dt.day, tzinfo=timezone.utc
+    )
+
+    # If "to" is not exactly midnight, include that calendar day too
+    if to_dt.time() != datetime.min.time().replace(tzinfo=None):
+        days_end_exclusive = last_day_start + timedelta(days=1)
+    else:
+        days_end_exclusive = last_day_start
+
+    buckets: List[UsageBucket] = []
+    cursor = current_day_start
+
+    while cursor < days_end_exclusive:
+        next_cursor = cursor + timedelta(days=1)
+        bucket_amount = bucket_totals.get(cursor.date(), 0)
+
+        # Clip displayed bucket edges to requested range
+        bucket_start = max(cursor, from_dt)
+        bucket_end = min(next_cursor, to_dt)
+
+        if bucket_start < bucket_end:
+            buckets.append(
+                UsageBucket(
+                    bucket_start=bucket_start,
+                    bucket_end=bucket_end,
+                    amount=bucket_amount,
+                )
+            )
+
+        cursor = next_cursor
+
+    return TenantUsageResponse(
+        tenant_id=tenant_id,
+        from_=from_dt,
+        to=to_dt,
+        granularity=granularity,
+        buckets=buckets,
+    )
 
 
 if __name__ == "__main__":
