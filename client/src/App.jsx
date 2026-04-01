@@ -17,22 +17,29 @@ const api = axios.create({
 
 const AUTH_STORAGE_KEY = 'teladoc_auth';
 
-const HARD_CODED_USERS = [
-    {
-        username: 'admin',
-        email: 'admin@teladoc.com',
-        password: 'password123',
-        role: 'admin',
-        displayName: 'Admin User',
-    },
-    {
-        username: 'tenant',
-        email: 'tenant@teladoc.com',
-        password: 'password123',
-        role: 'tenant',
-        displayName: 'Tenant User',
-    },
-];
+function getStoredAuth() {
+    try {
+        const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function setStoredAuth(auth) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+}
+
+function clearStoredAuth() {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function buildAuthHeaders(auth) {
+    if (!auth?.token) return {};
+    return {
+        Authorization: `Bearer ${auth.token}`,
+    };
+}
 
 function formatDate(value) {
     if (!value) return 'No activity yet';
@@ -57,33 +64,6 @@ function formatTime(value) {
 
 function generateIdempotencyKey() {
     return crypto.randomUUID();
-}
-
-function createClientToken(user) {
-    return btoa(
-        JSON.stringify({
-            sub: user.username,
-            role: user.role,
-            issued_at: new Date().toISOString(),
-        }),
-    );
-}
-
-function getStoredAuth() {
-    try {
-        const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-        return raw ? JSON.parse(raw) : null;
-    } catch {
-        return null;
-    }
-}
-
-function setStoredAuth(auth) {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
-}
-
-function clearStoredAuth() {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
 function ProtectedRoute({ isAuthenticated, children }) {
@@ -125,7 +105,7 @@ function Header({ auth, onLogout }) {
                         </span>
                     )}
 
-                    <div className="profile">{auth?.user?.displayName?.[0] || 'A'}</div>
+                    <div className="profile">{auth?.user?.display_name?.[0] || 'A'}</div>
 
                     <button className="logout-btn" onClick={onLogout}>
                         Log out
@@ -141,10 +121,11 @@ function LoginPage({ onLogin }) {
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const navigate = useNavigate();
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setErrorMessage('');
 
@@ -153,31 +134,27 @@ function LoginPage({ onLogin }) {
             return;
         }
 
-        const matchedUser = HARD_CODED_USERS.find(
-            (user) =>
-                (user.username.toLowerCase() === identifier.trim().toLowerCase() ||
-                    user.email.toLowerCase() === identifier.trim().toLowerCase()) &&
-                user.password === password,
-        );
+        try {
+            setSubmitting(true);
 
-        if (!matchedUser) {
-            setErrorMessage('Invalid username/email or password.');
-            return;
+            const response = await api.post('/v1/auth/login', {
+                identifier: identifier.trim(),
+                password,
+            });
+
+            const authPayload = {
+                token: response.data.access_token,
+                expires_at: response.data.expires_at,
+                user: response.data.user,
+            };
+
+            onLogin(authPayload);
+            navigate('/', { replace: true });
+        } catch (error) {
+            setErrorMessage(error.response?.data?.message || 'Invalid username/email or password.');
+        } finally {
+            setSubmitting(false);
         }
-
-        const token = createClientToken(matchedUser);
-        const authPayload = {
-            token,
-            user: {
-                username: matchedUser.username,
-                email: matchedUser.email,
-                role: matchedUser.role,
-                displayName: matchedUser.displayName,
-            },
-        };
-
-        onLogin(authPayload);
-        navigate('/', { replace: true });
     };
 
     return (
@@ -227,8 +204,8 @@ function LoginPage({ onLogin }) {
 
                     {errorMessage && <p className="login-error">{errorMessage}</p>}
 
-                    <button type="submit" className="login-submit-btn">
-                        Sign In
+                    <button type="submit" className="login-submit-btn" disabled={submitting}>
+                        {submitting ? 'Signing In...' : 'Sign In'}
                     </button>
 
                     <div className="login-secondary-link">
@@ -338,14 +315,21 @@ function UsageByDayTable({ events }) {
     );
 }
 
-function EventForm({ onSubmit, isAdmin }) {
-    const [tenantId, setTenantId] = useState('');
+function EventForm({ onSubmit, isAdmin, auth }) {
+    const tenantScopedId = auth?.user?.tenant_id || '';
+    const [tenantId, setTenantId] = useState(tenantScopedId);
     const [eventType, setEventType] = useState('tokens');
     const [amount, setAmount] = useState('');
     const [allowOverage, setAllowOverage] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [message, setMessage] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+
+    useEffect(() => {
+        if (!isAdmin && tenantScopedId) {
+            setTenantId(tenantScopedId);
+        }
+    }, [isAdmin, tenantScopedId]);
 
     const buildFriendlyErrorMessage = (error) => {
         const status = error.response?.status;
@@ -355,6 +339,14 @@ function EventForm({ onSubmit, isAdmin }) {
 
         if (!error.response) {
             return 'Cannot reach the server. Make sure the backend is running on http://localhost:8000.';
+        }
+
+        if (status === 401) {
+            return 'Your session has expired or is invalid. Please sign in again.';
+        }
+
+        if (status === 403) {
+            return message || 'You do not have permission to perform this action.';
         }
 
         if (status === 409 && code === 'quota_exceeded') {
@@ -381,10 +373,6 @@ function EventForm({ onSubmit, isAdmin }) {
             return 'Tenant not found. Please check the Tenant ID and try again.';
         }
 
-        if (status === 403 && code === 'admin_required') {
-            return 'You are not allowed to perform this action. Admin access is required for overage override.';
-        }
-
         if (status === 400 && code === 'event_timestamp_in_future') {
             return 'Invalid timestamp. Event timestamp cannot be more than 5 minutes in the future.';
         }
@@ -397,7 +385,6 @@ function EventForm({ onSubmit, isAdmin }) {
             const messages = responseData.details
                 .map((item) => `${item.field}: ${item.message}`)
                 .join('; ');
-
             return `Invalid input. ${messages}`;
         }
 
@@ -424,8 +411,8 @@ function EventForm({ onSubmit, isAdmin }) {
             return;
         }
 
-        if (!isAdmin && allowOverage) {
-            setErrorMessage('Only admins can use overage override.');
+        if (!isAdmin && tenantScopedId && tenantId.trim() !== tenantScopedId) {
+            setErrorMessage('Tenant users can only ingest usage for their own tenant.');
             return;
         }
 
@@ -439,55 +426,10 @@ function EventForm({ onSubmit, isAdmin }) {
         };
 
         try {
-            let result;
-
-            if (allowOverage && isAdmin) {
-                const response = await api.post('/v1/usage/events?allow_overage=true', payload, {
-                    headers: {
-                        'x-admin': 'true',
-                    },
-                });
-
-                result = {
-                    ok: true,
-                    replayed: response.data.idempotency_replayed,
-                    event: response.data,
-                };
-            } else {
-                result = await onSubmit(payload);
-            }
+            let result = await onSubmit(payload, allowOverage);
 
             if (!result.ok) {
-                if (result.errorType === 'quota_exceeded') {
-                    const remaining = Number(result.remainingUnits ?? 0).toLocaleString();
-                    const requested = Number(result.requestedUnits ?? 0).toLocaleString();
-                    const used = Number(result.monthToDateUsage ?? 0).toLocaleString();
-                    const quota = Number(result.configuredQuota ?? 0).toLocaleString();
-
-                    setErrorMessage(
-                        `Quota exceeded. This event would go over the tenant's monthly limit. ` +
-                            `Remaining units: ${remaining}. Requested units: ${requested}. ` +
-                            `Month-to-date usage: ${used} of ${quota}. ` +
-                            (result.allowOverageAvailableForAdmin
-                                ? 'An admin can retry with overage override enabled.'
-                                : ''),
-                    );
-                } else if (result.errorType === 'conflict') {
-                    setErrorMessage(
-                        result.message ||
-                            'Conflict detected. This idempotency key may already have been used with a different payload.',
-                    );
-                } else if (result.errorType === 'not_found') {
-                    setErrorMessage(result.message || 'Tenant not found.');
-                } else if (result.errorType === 'validation') {
-                    setErrorMessage(result.message || 'Invalid input.');
-                } else if (result.errorType === 'invalid_timestamp') {
-                    setErrorMessage(result.message || 'Invalid timestamp.');
-                } else {
-                    setErrorMessage(
-                        result.message || 'Failed to create event for an unknown reason.',
-                    );
-                }
+                setErrorMessage(result.message || 'Failed to create event.');
                 return;
             }
 
@@ -499,12 +441,13 @@ function EventForm({ onSubmit, isAdmin }) {
                 setMessage('Event created successfully.');
             }
 
-            setTenantId('');
+            if (isAdmin) {
+                setTenantId('');
+            }
             setEventType('tokens');
             setAmount('');
             setAllowOverage(false);
         } catch (error) {
-            console.error('Create event failed:', error);
             setErrorMessage(buildFriendlyErrorMessage(error));
         } finally {
             setSubmitting(false);
@@ -527,6 +470,7 @@ function EventForm({ onSubmit, isAdmin }) {
                 placeholder="Tenant UUID"
                 value={tenantId}
                 onChange={(e) => setTenantId(e.target.value)}
+                readOnly={!isAdmin}
             />
 
             <label className="dashboard-form-label">Amount</label>
@@ -564,7 +508,7 @@ function EventForm({ onSubmit, isAdmin }) {
     );
 }
 
-function Dashboard({ auth }) {
+function Dashboard({ auth, onUnauthorized }) {
     const [events, setEvents] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -572,9 +516,14 @@ function Dashboard({ auth }) {
 
     const fetchEvents = async () => {
         try {
-            const response = await api.get('/v1/usage/events');
+            const response = await api.get('/v1/usage/events', {
+                headers: buildAuthHeaders(auth),
+            });
             setEvents(response.data.events);
         } catch (error) {
+            if (error.response?.status === 401) {
+                onUnauthorized();
+            }
             console.error('Error fetching events:', error);
         } finally {
             setLoading(false);
@@ -585,97 +534,40 @@ function Dashboard({ auth }) {
         fetchEvents();
     }, []);
 
-    const handleCreateEvent = async (payload) => {
+    const handleCreateEvent = async (payload, allowOverage) => {
         try {
-            const response = await api.post('/v1/usage/events', payload);
+            const response = await api.post(
+                `/v1/usage/events${allowOverage ? '?allow_overage=true' : ''}`,
+                payload,
+                {
+                    headers: buildAuthHeaders(auth),
+                },
+            );
 
-            if (response.data.idempotency_replayed) {
-                return {
-                    ok: true,
-                    replayed: true,
-                    event: response.data,
-                };
+            if (!response.data.idempotency_replayed) {
+                setEvents((prev) => [response.data, ...prev]);
             }
-
-            setEvents((prev) => [response.data, ...prev]);
 
             return {
                 ok: true,
-                replayed: false,
+                replayed: response.data.idempotency_replayed,
                 event: response.data,
             };
         } catch (error) {
+            if (error.response?.status === 401) {
+                onUnauthorized();
+            }
+
             const status = error.response?.status;
             const responseData = error.response?.data;
-            const code = responseData?.code;
             const message = responseData?.message;
-
-            if (status === 409 && code === 'quota_exceeded') {
-                return {
-                    ok: false,
-                    errorType: 'quota_exceeded',
-                    message,
-                    remainingUnits: responseData.remaining_units,
-                    configuredQuota: responseData.configured_monthly_quota,
-                    monthToDateUsage: responseData.month_to_date_usage,
-                    requestedUnits: responseData.requested_units,
-                    allowOverageAvailableForAdmin: responseData.allow_overage_available_for_admin,
-                };
-            }
-
-            if (status === 409 && code === 'idempotency_conflict') {
-                return {
-                    ok: false,
-                    errorType: 'conflict',
-                    message: message || 'Conflict error.',
-                };
-            }
-
-            if (status === 404 && code === 'tenant_not_found') {
-                return {
-                    ok: false,
-                    errorType: 'not_found',
-                    message: 'Tenant not found.',
-                };
-            }
-
-            if (status === 400 && code === 'event_timestamp_in_future') {
-                return {
-                    ok: false,
-                    errorType: 'invalid_timestamp',
-                    message: 'Event timestamp cannot be more than 5 minutes in the future.',
-                };
-            }
-
-            if (status === 400 && code === 'event_timestamp_too_old') {
-                return {
-                    ok: false,
-                    errorType: 'invalid_timestamp',
-                    message: 'Event timestamp cannot be more than 30 days in the past.',
-                };
-            }
-
-            if (status === 422) {
-                const messages = Array.isArray(responseData?.details)
-                    ? responseData.details
-                          .map((item) => `${item.field}: ${item.message}`)
-                          .join('; ')
-                    : message || 'Validation error.';
-
-                return {
-                    ok: false,
-                    errorType: 'validation',
-                    message: messages,
-                };
-            }
 
             return {
                 ok: false,
-                errorType: 'unknown',
                 message:
                     typeof message === 'string' && message.trim()
                         ? message
-                        : 'Failed to create event.',
+                        : `Failed to create event. Status ${status}.`,
             };
         }
     };
@@ -692,7 +584,7 @@ function Dashboard({ auth }) {
         <div className="tenant-dashboard">
             <div className="tenant-dashboard-top">
                 <TokenCard used={tokenUsed} total={tokenQuota} />
-                <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} />
+                <EventForm onSubmit={handleCreateEvent} isAdmin={isAdmin} auth={auth} />
             </div>
 
             <section className="usage-history-section">
@@ -703,7 +595,7 @@ function Dashboard({ auth }) {
     );
 }
 
-function AdminPage({ auth }) {
+function AdminPage({ auth, onUnauthorized }) {
     const [tenants, setTenants] = useState([]);
     const [auditRecords, setAuditRecords] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -718,7 +610,9 @@ function AdminPage({ auth }) {
     const isAdmin = auth?.user?.role === 'admin';
 
     const fetchTenants = async () => {
-        const response = await api.get('/v1/tenants');
+        const response = await api.get('/v1/tenants', {
+            headers: buildAuthHeaders(auth),
+        });
         setTenants(response.data.tenants);
     };
 
@@ -729,9 +623,7 @@ function AdminPage({ auth }) {
         }
 
         const response = await api.get('/v1/audit', {
-            headers: {
-                'x-admin': 'true',
-            },
+            headers: buildAuthHeaders(auth),
         });
         setAuditRecords(response.data.records);
     };
@@ -741,8 +633,11 @@ function AdminPage({ auth }) {
             setError('');
             await Promise.all([fetchTenants(), fetchAuditLogs()]);
         } catch (err) {
+            if (err.response?.status === 401) {
+                onUnauthorized();
+            }
             console.error('Error loading admin data:', err);
-            setError('Failed to load admin data.');
+            setError(err.response?.data?.message || 'Failed to load admin data.');
         } finally {
             setLoading(false);
         }
@@ -799,15 +694,16 @@ function AdminPage({ auth }) {
                     reason: trimmedReason,
                 },
                 {
-                    headers: {
-                        'x-admin': 'true',
-                    },
+                    headers: buildAuthHeaders(auth),
                 },
             );
 
             await Promise.all([fetchTenants(), fetchAuditLogs()]);
             closeModal();
         } catch (err) {
+            if (err.response?.status === 401) {
+                onUnauthorized();
+            }
             console.error('Error updating tenant quota:', err.response?.data || err);
 
             if (err.response?.status === 422 && Array.isArray(err.response?.data?.details)) {
@@ -1006,7 +902,7 @@ function AdminPage({ auth }) {
     );
 }
 
-function AppShell({ auth, onLogout }) {
+function AppShell({ auth, onLogout, onUnauthorized }) {
     return (
         <>
             <Header auth={auth} onLogout={onLogout} />
@@ -1016,7 +912,7 @@ function AppShell({ auth, onLogout }) {
                         path="/"
                         element={
                             <ProtectedRoute isAuthenticated={!!auth}>
-                                <Dashboard auth={auth} />
+                                <Dashboard auth={auth} onUnauthorized={onUnauthorized} />
                             </ProtectedRoute>
                         }
                     />
@@ -1024,7 +920,7 @@ function AppShell({ auth, onLogout }) {
                         path="/admin"
                         element={
                             <ProtectedRoute isAuthenticated={!!auth}>
-                                <AdminPage auth={auth} />
+                                <AdminPage auth={auth} onUnauthorized={onUnauthorized} />
                             </ProtectedRoute>
                         }
                     />
@@ -1047,6 +943,11 @@ function App() {
         setAuth(null);
     };
 
+    const handleUnauthorized = () => {
+        clearStoredAuth();
+        setAuth(null);
+    };
+
     return (
         <Router>
             <Routes>
@@ -1056,7 +957,16 @@ function App() {
                         auth ? <Navigate to="/" replace /> : <LoginPage onLogin={handleLogin} />
                     }
                 />
-                <Route path="/*" element={<AppShell auth={auth} onLogout={handleLogout} />} />
+                <Route
+                    path="/*"
+                    element={
+                        <AppShell
+                            auth={auth}
+                            onLogout={handleLogout}
+                            onUnauthorized={handleUnauthorized}
+                        />
+                    }
+                />
             </Routes>
         </Router>
     );

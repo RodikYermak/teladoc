@@ -1,109 +1,32 @@
-# from fastapi import FastAPI
-
-# from app.routes.issues import router as issues_router
-# from app.routes.auth import router as auth_router
-# from app.routes.health import router as health_router
-
-# from app.middleware.timer import timing_middleware
-# from fastapi.middleware.cors import CORSMiddleware
-
-# app = FastAPI(
-#     title="Issue Tracker API",
-#     version="0.1.0",
-#     description="A mini production-style API built with FastAPI",
-# )
-
-# app.middleware("http")(timing_middleware)
-
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# app.include_router(auth_router)
-# app.include_router(issues_router)
-# app.include_router(health_router)
-
-
-# # https://teladoc-poug.onrender.com/api/v1/issues/
-
-
-# import uvicorn
-# from fastapi import FastAPI
-# from fastapi.middleware.cors import CORSMiddleware
-# from pydantic import BaseModel, Field
-# from typing import List
-# from uuid import UUID, uuid4
-# from datetime import datetime
-
-# # Event schema
-# class Event(BaseModel):
-#     event_id: UUID = Field(default_factory=uuid4)
-#     tenant_id: UUID
-#     type: str  # "tokens" or "inference_seconds"
-#     amount: int
-#     timestamp: datetime
-
-# class Events(BaseModel):
-#     events: List[Event]
-
-# app = FastAPI(debug=True)
-
-# origins = [
-#     "http://localhost:5173",
-# ]
-
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=origins,
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# # In-memory DB
-# memory_db = {"events": []}
-
-# @app.get("/events", response_model=Events)
-# def get_events():
-#     return Events(events=memory_db["events"])
-
-# @app.post("/events", response_model=Event)
-# def add_event(event: Event):
-#     # Only use tenant_id, type, amount from client
-#     new_event = Event(
-#         tenant_id=event.tenant_id,
-#         type=event.type,
-#         amount=event.amount
-#     )
-#     memory_db["events"].append(new_event)
-#     return new_event
-
-# if __name__ == "__main__":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
-
 import hashlib
 import json
+import secrets
 import uvicorn
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Any
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query, Response, status, Request
+import jwt
+from fastapi import FastAPI, HTTPException, Query, Response, Request, Depends, Header, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
+
+JWT_SECRET = "dev_only_super_secret_signing_key_change_me"
+JWT_ALGORITHM = "HS256"
+JWT_ISSUER = "teladoc-fake-issuer"
+JWT_EXPIRES_MINUTES = 60
 
 MAX_EVENT_AMOUNT = 1_000_000_000
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
 MAX_REASON_LENGTH = 200
 MIN_REASON_LENGTH = 10
+
+security = HTTPBearer(auto_error=False)
 
 
 class StrictBaseModel(BaseModel):
@@ -114,6 +37,26 @@ class ErrorResponse(StrictBaseModel):
     code: str
     message: str
     details: Optional[list | dict | str] = None
+
+
+class LoginRequest(StrictBaseModel):
+    identifier: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+
+    @field_validator("identifier")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("identifier cannot be empty")
+        return trimmed
+
+
+class LoginResponse(StrictBaseModel):
+    access_token: str
+    token_type: Literal["bearer"]
+    expires_at: datetime
+    user: dict
 
 
 class EventCreate(StrictBaseModel):
@@ -221,6 +164,37 @@ class TenantUsageResponse(StrictBaseModel):
     buckets: List[UsageBucket]
 
 
+class AuthContext(StrictBaseModel):
+    sub: str
+    role: Literal["admin", "tenant"]
+    tenant_id: Optional[UUID] = None
+    exp: int
+    iss: str
+
+
+TENANT_1 = UUID("550e8400-e29b-41d4-a716-446655440000")
+TENANT_2 = UUID("11111111-1111-1111-1111-111111111111")
+TENANT_3 = UUID("22222222-2222-2222-2222-222222222222")
+
+FAKE_USERS = [
+    {
+        "username": "admin",
+        "email": "admin@teladoc.com",
+        "password": "password123",
+        "role": "admin",
+        "display_name": "Admin User",
+        "tenant_id": None,
+    },
+    {
+        "username": "tenant",
+        "email": "tenant@teladoc.com",
+        "password": "password123",
+        "role": "tenant",
+        "display_name": "Tenant User",
+        "tenant_id": str(TENANT_1),
+    },
+]
+
 app = FastAPI(debug=True)
 
 app.add_middleware(
@@ -234,18 +208,9 @@ app.add_middleware(
 memory_db = {
     "events": [],
     "tenants": [
-        TenantRecord(
-            tenant_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
-            configured_monthly_quota=1200000,
-        ),
-        TenantRecord(
-            tenant_id=UUID("11111111-1111-1111-1111-111111111111"),
-            configured_monthly_quota=800000,
-        ),
-        TenantRecord(
-            tenant_id=UUID("22222222-2222-2222-2222-222222222222"),
-            configured_monthly_quota=500000,
-        ),
+        TenantRecord(tenant_id=TENANT_1, configured_monthly_quota=1_200_000),
+        TenantRecord(tenant_id=TENANT_2, configured_monthly_quota=800_000),
+        TenantRecord(tenant_id=TENANT_3, configured_monthly_quota=500_000),
     ],
     "audit_logs": [],
     "idempotency_index": {},
@@ -258,11 +223,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     for err in exc.errors():
         loc = [str(part) for part in err.get("loc", []) if part != "body"]
         field = ".".join(loc) if loc else "request"
-        details.append({
-            "field": field,
-            "message": err.get("msg", "Invalid value"),
-            "type": err.get("type", "validation_error"),
-        })
+        details.append(
+            {
+                "field": field,
+                "message": err.get("msg", "Invalid value"),
+                "type": err.get("type", "validation_error"),
+            }
+        )
 
     return JSONResponse(
         status_code=422,
@@ -291,35 +258,112 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc.detail, str):
         return JSONResponse(
             status_code=exc.status_code,
-            content={
-                "code": "http_error",
-                "message": exc.detail,
-            },
+            content={"code": "http_error", "message": exc.detail},
         )
 
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "code": "http_error",
-            "message": "Request failed.",
+        content={"code": "http_error", "message": "Request failed."},
+    )
+
+
+def unauthorized(message: str = "Authentication required") -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail={
+            "code": "unauthorized",
+            "message": message,
+        },
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def forbidden(message: str = "You do not have permission to perform this action") -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={
+            "code": "forbidden",
+            "message": message,
         },
     )
 
 
-def require_admin(x_admin: Optional[str]) -> str:
-    if x_admin != "true":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "admin_required",
-                "message": "Admin access required",
-            },
+def create_access_token(user: dict) -> tuple[str, datetime]:
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRES_MINUTES)
+    payload = {
+        "sub": user["username"],
+        "role": user["role"],
+        "tenant_id": user["tenant_id"],
+        "iss": JWT_ISSUER,
+        "exp": expires_at,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token, expires_at
+
+
+def authenticate_user(identifier: str, password: str) -> Optional[dict]:
+    identifier_lower = identifier.strip().lower()
+    for user in FAKE_USERS:
+        matches_identifier = (
+            user["username"].lower() == identifier_lower
+            or user["email"].lower() == identifier_lower
         )
-    return "admin@example.com"
+        password_matches = secrets.compare_digest(user["password"], password)
+        if matches_identifier and password_matches:
+            return user
+    return None
 
 
-def is_admin(x_admin: Optional[str]) -> bool:
-    return x_admin == "true"
+def get_current_auth(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> AuthContext:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise unauthorized()
+
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+        )
+    except jwt.ExpiredSignatureError:
+        raise unauthorized("Token has expired")
+    except jwt.InvalidTokenError:
+        raise unauthorized("Invalid token")
+
+    try:
+        tenant_id = payload.get("tenant_id")
+        auth = AuthContext(
+            sub=payload["sub"],
+            role=payload["role"],
+            tenant_id=UUID(tenant_id) if tenant_id else None,
+            exp=payload["exp"],
+            iss=payload["iss"],
+        )
+    except Exception:
+        raise unauthorized("Invalid token claims")
+
+    if auth.role == "tenant" and auth.tenant_id is None:
+        raise unauthorized("Tenant token missing tenant scope")
+
+    return auth
+
+
+def require_admin(auth: AuthContext) -> AuthContext:
+    if auth.role != "admin":
+        raise forbidden("Admin access required")
+    return auth
+
+
+def ensure_tenant_access(auth: AuthContext, tenant_id: UUID) -> None:
+    if auth.role == "admin":
+        return
+    if auth.role == "tenant" and auth.tenant_id == tenant_id:
+        return
+    raise forbidden("Tenant scope does not allow access to this tenant")
 
 
 def find_tenant_index(tenant_id: UUID) -> int:
@@ -328,10 +372,7 @@ def find_tenant_index(tenant_id: UUID) -> int:
             return idx
     raise HTTPException(
         status_code=404,
-        detail={
-            "code": "tenant_not_found",
-            "message": "Tenant not found",
-        },
+        detail={"code": "tenant_not_found", "message": "Tenant not found"},
     )
 
 
@@ -341,10 +382,7 @@ def get_tenant_record(tenant_id: UUID) -> TenantRecord:
             return tenant
     raise HTTPException(
         status_code=404,
-        detail={
-            "code": "tenant_not_found",
-            "message": "Tenant not found",
-        },
+        detail={"code": "tenant_not_found", "message": "Tenant not found"},
     )
 
 
@@ -354,10 +392,7 @@ def ensure_tenant_exists(tenant_id: UUID) -> None:
             return
     raise HTTPException(
         status_code=404,
-        detail={
-            "code": "tenant_not_found",
-            "message": "Tenant not found",
-        },
+        detail={"code": "tenant_not_found", "message": "Tenant not found"},
     )
 
 
@@ -451,6 +486,28 @@ def validate_event_timestamp(event_timestamp: datetime) -> None:
         )
 
 
+@app.post("/v1/auth/login", response_model=LoginResponse)
+def login(payload: LoginRequest):
+    user = authenticate_user(payload.identifier, payload.password)
+    if not user:
+        raise unauthorized("Invalid username/email or password")
+
+    access_token, expires_at = create_access_token(user)
+
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_at=expires_at,
+        user={
+            "username": user["username"],
+            "email": user["email"],
+            "role": user["role"],
+            "display_name": user["display_name"],
+            "tenant_id": user["tenant_id"],
+        },
+    )
+
+
 @app.get("/health")
 def health():
     return {
@@ -467,15 +524,17 @@ def ready():
         "status": "ready",
         "service": "usage-api",
         "time": datetime.now(timezone.utc),
-        "checks": {
-            "db": db_status,
-        },
+        "checks": {"db": db_status},
     }
 
 
 @app.get("/v1/usage/events", response_model=EventsResponse)
-def list_usage_events():
-    return {"events": memory_db["events"]}
+def list_usage_events(auth: AuthContext = Depends(get_current_auth)):
+    if auth.role == "admin":
+        return {"events": memory_db["events"]}
+
+    tenant_events = [event for event in memory_db["events"] if event.tenant_id == auth.tenant_id]
+    return {"events": tenant_events}
 
 
 @app.post("/v1/usage/events", response_model=Event)
@@ -483,9 +542,13 @@ def create_usage_event(
     event: EventCreate,
     response: Response,
     allow_overage: bool = Query(False),
-    x_admin: Optional[str] = Header(default=None),
+    auth: AuthContext = Depends(get_current_auth),
 ):
     ensure_tenant_exists(event.tenant_id)
+    ensure_tenant_access(auth, event.tenant_id)
+
+    if allow_overage and auth.role != "admin":
+        raise forbidden("Only admins can use allow_overage")
 
     event_timestamp = event.timestamp or datetime.now(timezone.utc)
     validate_event_timestamp(event_timestamp)
@@ -513,6 +576,8 @@ def create_usage_event(
         response.headers["X-Idempotent-Replay"] = "true"
 
         stored_event: Event = existing["event"]
+        ensure_tenant_access(auth, stored_event.tenant_id)
+
         return Event(
             event_id=stored_event.event_id,
             tenant_id=stored_event.tenant_id,
@@ -531,7 +596,7 @@ def create_usage_event(
         remaining_units = max(tenant.configured_monthly_quota - month_to_date_usage, 0)
 
         over_quota = projected_usage > tenant.configured_monthly_quota
-        admin_override = allow_overage and is_admin(x_admin)
+        admin_override = allow_overage and auth.role == "admin"
 
         if over_quota and not admin_override:
             raise HTTPException(
@@ -568,13 +633,16 @@ def create_usage_event(
 
 
 @app.get("/v1/tenants", response_model=TenantsResponse)
-def list_tenants():
+def list_tenants(auth: AuthContext = Depends(get_current_auth)):
     now = datetime.now(timezone.utc)
     month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
 
     tenant_summaries: List[TenantSummary] = []
 
     for tenant in memory_db["tenants"]:
+        if auth.role == "tenant" and tenant.tenant_id != auth.tenant_id:
+            continue
+
         tenant_events = [
             event for event in memory_db["events"] if event.tenant_id == tenant.tenant_id
         ]
@@ -605,9 +673,9 @@ def list_tenants():
 def update_tenant_quota(
     tenant_id: UUID,
     payload: QuotaUpdateRequest,
-    x_admin: Optional[str] = Header(default=None),
+    auth: AuthContext = Depends(get_current_auth),
 ):
-    actor = require_admin(x_admin)
+    require_admin(auth)
 
     tenant_index = find_tenant_index(tenant_id)
     tenant = memory_db["tenants"][tenant_index]
@@ -627,7 +695,7 @@ def update_tenant_quota(
         old_value=old_quota,
         new_value=new_quota,
         reason=payload.reason,
-        actor=actor,
+        actor=auth.sub,
     )
     memory_db["audit_logs"].append(audit_record)
 
@@ -639,8 +707,8 @@ def update_tenant_quota(
 
 
 @app.get("/v1/audit", response_model=AuditResponse)
-def list_audit_logs(x_admin: Optional[str] = Header(default=None)):
-    require_admin(x_admin)
+def list_audit_logs(auth: AuthContext = Depends(get_current_auth)):
+    require_admin(auth)
     return {"records": memory_db["audit_logs"]}
 
 
@@ -650,8 +718,10 @@ def get_tenant_usage(
     from_: str = Query(..., alias="from"),
     to: str = Query(...),
     granularity: Literal["day"] = Query("day"),
+    auth: AuthContext = Depends(get_current_auth),
 ):
     ensure_tenant_exists(tenant_id)
+    ensure_tenant_access(auth, tenant_id)
 
     from_dt = parse_iso_datetime(from_, "from")
     to_dt = parse_iso_datetime(to, "to")
@@ -687,12 +757,8 @@ def get_tenant_usage(
         bucket_day = event.timestamp.astimezone(timezone.utc).date()
         bucket_totals[bucket_day] += event.amount
 
-    current_day_start = datetime(
-        from_dt.year, from_dt.month, from_dt.day, tzinfo=timezone.utc
-    )
-    last_day_start = datetime(
-        to_dt.year, to_dt.month, to_dt.day, tzinfo=timezone.utc
-    )
+    current_day_start = datetime(from_dt.year, from_dt.month, from_dt.day, tzinfo=timezone.utc)
+    last_day_start = datetime(to_dt.year, to_dt.month, to_dt.day, tzinfo=timezone.utc)
 
     if to_dt.time() != datetime.min.time():
         days_end_exclusive = last_day_start + timedelta(days=1)
