@@ -6,6 +6,7 @@ import {
     Link,
     Navigate,
     useNavigate,
+    useLocation,
 } from 'react-router-dom';
 import axios from 'axios';
 import './index.css';
@@ -36,6 +37,22 @@ const HARD_CODED_USERS = [
 function formatDate(value) {
     if (!value) return 'No activity yet';
     return new Date(value).toLocaleString();
+}
+
+function formatShortDate(value) {
+    return new Date(value).toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+    });
+}
+
+function formatTime(value) {
+    return new Date(value).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+    });
 }
 
 function formatTimestamp(timestamp) {
@@ -81,20 +98,33 @@ function ProtectedRoute({ isAuthenticated, children }) {
 }
 
 function Header({ auth, onLogout }) {
-    return (
-        <header className="header">
-            <div className="logo">
-                Teladoc <span>HEALTH</span>
-            </div>
+    const location = useLocation();
 
-            <nav className="nav">
-                <Link to="/">Tenant Dashboard</Link>
-                <Link to="/admin">Admin View</Link>
-                <div className="profile">{auth?.user?.displayName?.[0] || 'A'}</div>
-                <button className="logout-btn" onClick={onLogout}>
-                    Log out
-                </button>
-            </nav>
+    return (
+        <header className="app-header-wrap">
+            <div className="header-inner">
+                <div className="logo">
+                    Teladoc <span>HEALTH</span>
+                </div>
+
+                <nav className="nav">
+                    <Link
+                        to="/"
+                        className={location.pathname === '/' ? 'nav-link active' : 'nav-link'}>
+                        Tenant Dashboard
+                    </Link>
+                    <Link
+                        to="/admin"
+                        className={location.pathname === '/admin' ? 'nav-link active' : 'nav-link'}>
+                        Admin View
+                    </Link>
+                    <div className="profile">{auth?.user?.displayName?.[0] || 'A'}</div>
+                    <button className="logout-btn" onClick={onLogout}>
+                        Log out
+                    </button>
+                </nav>
+            </div>
+            <div className="header-divider" />
         </header>
     );
 }
@@ -213,37 +243,76 @@ function TokenCard({ used, total }) {
     const isWarning = total > 0 && used / total >= 0.8;
 
     return (
-        <div className="card">
-            <h3>Token Utilization</h3>
-            <div className="metric">{used.toLocaleString()}</div>
+        <div className="tenant-card usage-card">
+            <h3>Token Utilizations</h3>
 
-            <div className="progress-container">
-                <div className="progress" style={{ width: `${percent}%` }} />
+            <div className="usage-big-number">{used.toLocaleString()}</div>
+
+            <div className="usage-progress-row">
+                <div className="progress-container">
+                    <div className="progress" style={{ width: `${percent}%` }} />
+                </div>
             </div>
 
-            <div className="subtext">Quota: {total.toLocaleString()}</div>
-
-            {isWarning && <div className="warning">⚠️ Warning: usage above 80%</div>}
+            <div className="usage-footer-row">
+                {isWarning ? (
+                    <div className="warning-pill">⚠ WARNING</div>
+                ) : (
+                    <div className="usage-caption">Month-to-date usage</div>
+                )}
+                <div className="usage-total-number">{total.toLocaleString()}</div>
+            </div>
         </div>
     );
 }
 
-function EventList({ events }) {
+function UsageByDayTable({ events }) {
     if (!events.length) {
-        return <p>No events yet.</p>;
+        return <p>No usage events yet.</p>;
     }
 
+    const grouped = events.reduce((acc, event) => {
+        const dayKey = new Date(event.timestamp).toDateString();
+        if (!acc[dayKey]) acc[dayKey] = [];
+        acc[dayKey].push(event);
+        return acc;
+    }, {});
+
+    const orderedDays = Object.keys(grouped).sort((a, b) => new Date(b) - new Date(a));
+
     return (
-        <div className="events">
-            {events.map((event) => (
-                <div className="event-item" key={event.event_id}>
-                    <div>
-                        <strong>{event.event_type}</strong> — {event.amount.toLocaleString()}
+        <div className="usage-table-wrap">
+            {orderedDays.map((dayKey) => {
+                const items = grouped[dayKey].sort(
+                    (a, b) => new Date(b.timestamp) - new Date(a.timestamp),
+                );
+
+                return (
+                    <div key={dayKey} className="usage-day-group">
+                        <div className="usage-day-title">{formatShortDate(items[0].timestamp)}</div>
+
+                        <table className="usage-day-table">
+                            <tbody>
+                                {items.map((event) => (
+                                    <tr key={event.event_id}>
+                                        <td className="usage-time-cell">
+                                            {formatTime(event.timestamp)}
+                                        </td>
+                                        <td className="usage-type-cell">
+                                            {event.event_type === 'tokens'
+                                                ? 'Tokens processed'
+                                                : 'Inference seconds'}
+                                        </td>
+                                        <td className="usage-amount-cell">
+                                            {event.amount.toLocaleString()}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
-                    <div className="event-meta">Tenant: {event.tenant_id}</div>
-                    <div className="event-meta">{formatTimestamp(event.timestamp)}</div>
-                </div>
-            ))}
+                );
+            })}
         </div>
     );
 }
@@ -417,44 +486,47 @@ function EventForm({ onSubmit }) {
     };
 
     return (
-        <form className="card form" onSubmit={handleSubmit}>
-            <h3>Create Event</h3>
+        <form className="tenant-card dashboard-event-card" onSubmit={handleSubmit}>
+            <h3>Event</h3>
 
+            <label className="dashboard-form-label">Event Name</label>
+            <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
+                <option value="tokens">Tokens processed</option>
+                <option value="inference_seconds">Inference seconds</option>
+            </select>
+
+            <label className="dashboard-form-label">Tenant ID</label>
             <input
                 type="text"
-                placeholder="Tenant ID (UUID)"
+                placeholder="Tenant UUID"
                 value={tenantId}
                 onChange={(e) => setTenantId(e.target.value)}
             />
 
-            <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
-                <option value="tokens">tokens</option>
-                <option value="inference_seconds">inference_seconds</option>
-            </select>
-
+            <label className="dashboard-form-label">Amount</label>
             <input
                 type="number"
                 min="1"
-                placeholder="Amount"
+                placeholder="1,000"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
             />
 
-            <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <label className="dashboard-checkbox-row">
                 <input
                     type="checkbox"
                     checked={allowOverage}
                     onChange={(e) => setAllowOverage(e.target.checked)}
                 />
-                Allow overage (admin override)
+                <span>Allow overage (admin override)</span>
             </label>
 
-            <button type="submit" disabled={submitting}>
+            <button type="submit" className="dashboard-submit-btn" disabled={submitting}>
                 {submitting ? 'Creating...' : 'Create Event'}
             </button>
 
-            {message && <p style={{ color: 'green', marginTop: '10px' }}>{message}</p>}
-            {errorMessage && <p style={{ color: 'red', marginTop: '10px' }}>{errorMessage}</p>}
+            {message && <p className="dashboard-success-text">{message}</p>}
+            {errorMessage && <p className="dashboard-error-text">{errorMessage}</p>}
         </form>
     );
 }
@@ -582,15 +654,15 @@ function Dashboard() {
     const tokenQuota = 1200000;
 
     return (
-        <div className="container">
-            <div className="cards">
+        <div className="tenant-dashboard">
+            <div className="tenant-dashboard-top">
                 <TokenCard used={tokenUsed} total={tokenQuota} />
                 <EventForm onSubmit={handleCreateEvent} />
             </div>
 
-            <section className="events-section">
+            <section className="usage-history-section">
                 <h2>Events</h2>
-                {loading ? <p>Loading...</p> : <EventList events={events} />}
+                {loading ? <p>Loading...</p> : <UsageByDayTable events={events} />}
             </section>
         </div>
     );
@@ -715,13 +787,7 @@ function AdminPage() {
     if (error) {
         return (
             <div className="admin-page">
-                <div
-                    style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: '16px',
-                    }}>
+                <div className="admin-page-topbar">
                     <h2>Admin View</h2>
                     <button className="edit-btn" onClick={loadAdminData}>
                         Refresh
@@ -734,13 +800,7 @@ function AdminPage() {
 
     return (
         <div className="admin-page">
-            <div
-                style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '16px',
-                }}>
+            <div className="admin-page-topbar">
                 <h2>Admin View</h2>
                 <button className="edit-btn" onClick={loadAdminData}>
                     Refresh
@@ -778,7 +838,7 @@ function AdminPage() {
                 </table>
             )}
 
-            <div style={{ marginTop: '32px' }}>
+            <div className="audit-trail-block">
                 <h3>Audit Trail</h3>
 
                 {!auditRecords.length ? (
