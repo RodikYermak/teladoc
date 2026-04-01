@@ -104,7 +104,7 @@ select {
     border: none;
     border-radius: 8px;
     padding: 10px 14px;
-    font-weight: 600;
+    font-weight: bold;
     background: #5f3b99;
     color: #ffffff;
     /* display: none; */
@@ -245,7 +245,7 @@ select {
     text-align: center;
     margin-top: 26px;
     font-size: 16px;
-    font-weight: 600;
+    font-weight: bold;
 }
 
 .login-error {
@@ -628,7 +628,7 @@ select {
 .field label {
     display: block;
     margin-bottom: 6px;
-    font-weight: 600;
+    font-weight: bold;
 }
 
 .field input {
