@@ -1,11 +1,37 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import {
+    BrowserRouter as Router,
+    Routes,
+    Route,
+    Link,
+    Navigate,
+    useNavigate,
+} from 'react-router-dom';
 import axios from 'axios';
 import './index.css';
 
 const api = axios.create({
     baseURL: 'http://localhost:8000',
 });
+
+const AUTH_STORAGE_KEY = 'teladoc_auth';
+
+const HARD_CODED_USERS = [
+    {
+        username: 'admin',
+        email: 'admin@teladoc.com',
+        password: 'password123',
+        role: 'admin',
+        displayName: 'Admin User',
+    },
+    {
+        username: 'tenant',
+        email: 'tenant@teladoc.com',
+        password: 'password123',
+        role: 'tenant',
+        displayName: 'Tenant User',
+    },
+];
 
 function formatDate(value) {
     if (!value) return 'No activity yet';
@@ -20,7 +46,41 @@ function generateIdempotencyKey() {
     return crypto.randomUUID();
 }
 
-function Header() {
+function createClientToken(user) {
+    return btoa(
+        JSON.stringify({
+            sub: user.username,
+            role: user.role,
+            issued_at: new Date().toISOString(),
+        }),
+    );
+}
+
+function getStoredAuth() {
+    try {
+        const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function setStoredAuth(auth) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+}
+
+function clearStoredAuth() {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function ProtectedRoute({ isAuthenticated, children }) {
+    if (!isAuthenticated) {
+        return <Navigate to="/login" replace />;
+    }
+    return children;
+}
+
+function Header({ auth, onLogout }) {
     return (
         <header className="header">
             <div className="logo">
@@ -30,9 +90,121 @@ function Header() {
             <nav className="nav">
                 <Link to="/">Tenant Dashboard</Link>
                 <Link to="/admin">Admin View</Link>
-                <div className="profile">A</div>
+                <div className="profile">{auth?.user?.displayName?.[0] || 'A'}</div>
+                <button className="logout-btn" onClick={onLogout}>
+                    Log out
+                </button>
             </nav>
         </header>
+    );
+}
+
+function LoginPage({ onLogin }) {
+    const [identifier, setIdentifier] = useState('');
+    const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
+    const navigate = useNavigate();
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        setErrorMessage('');
+
+        if (!identifier.trim() || !password.trim()) {
+            setErrorMessage('Please enter your username/email and password.');
+            return;
+        }
+
+        const matchedUser = HARD_CODED_USERS.find(
+            (user) =>
+                (user.username.toLowerCase() === identifier.trim().toLowerCase() ||
+                    user.email.toLowerCase() === identifier.trim().toLowerCase()) &&
+                user.password === password,
+        );
+
+        if (!matchedUser) {
+            setErrorMessage('Invalid username/email or password.');
+            return;
+        }
+
+        const token = createClientToken(matchedUser);
+        const authPayload = {
+            token,
+            user: {
+                username: matchedUser.username,
+                email: matchedUser.email,
+                role: matchedUser.role,
+                displayName: matchedUser.displayName,
+            },
+        };
+
+        onLogin(authPayload);
+        navigate('/', { replace: true });
+    };
+
+    return (
+        <div className="login-page">
+            <div className="login-brand-row">
+                <div className="logo login-logo">
+                    Teladoc <span>HEALTH</span>
+                </div>
+            </div>
+
+            <div className="login-divider" />
+
+            <div className="login-card">
+                <h1 className="login-title">Sign in to your account</h1>
+
+                <form onSubmit={handleSubmit} className="login-form">
+                    <div className="login-field">
+                        <label>Username or email</label>
+                        <input
+                            type="text"
+                            value={identifier}
+                            onChange={(e) => setIdentifier(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="login-field">
+                        <label>Password</label>
+                        <div className="password-input-wrap">
+                            <input
+                                type={showPassword ? 'text' : 'password'}
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                            />
+                            <button
+                                type="button"
+                                className="password-toggle"
+                                onClick={() => setShowPassword((prev) => !prev)}
+                                aria-label="Toggle password visibility">
+                                {showPassword ? '🙈' : '👁️'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="login-help-links">
+                        Forgot <a href="#!">username</a> or <a href="#!">password?</a>
+                    </div>
+
+                    {errorMessage && <p className="login-error">{errorMessage}</p>}
+
+                    <button type="submit" className="login-submit-btn">
+                        Sign In
+                    </button>
+
+                    <div className="login-secondary-link">
+                        <a href="#!">Create a new account</a>
+                    </div>
+                </form>
+
+                <div className="login-demo-box">
+                    <strong>Demo users</strong>
+                    <div>admin / password123</div>
+                    <div>tenant / password123</div>
+                </div>
+            </div>
+        </div>
     );
 }
 
@@ -76,7 +248,7 @@ function EventList({ events }) {
     );
 }
 
-function EventForm({ onSubmit, onEventCreated }) {
+function EventForm({ onSubmit }) {
     const [tenantId, setTenantId] = useState('');
     const [eventType, setEventType] = useState('tokens');
     const [amount, setAmount] = useState('');
@@ -230,10 +402,6 @@ function EventForm({ onSubmit, onEventCreated }) {
                 );
             } else {
                 setMessage('Event created successfully.');
-            }
-
-            if (result.ok && typeof onEventCreated === 'function') {
-                onEventCreated(result.event);
             }
 
             setTenantId('');
@@ -712,16 +880,58 @@ function AdminPage() {
     );
 }
 
-function App() {
+function AppShell({ auth, onLogout }) {
     return (
-        <Router>
-            <Header />
+        <>
+            <Header auth={auth} onLogout={onLogout} />
             <main className="page">
                 <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/admin" element={<AdminPage />} />
+                    <Route
+                        path="/"
+                        element={
+                            <ProtectedRoute isAuthenticated={!!auth}>
+                                <Dashboard />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin"
+                        element={
+                            <ProtectedRoute isAuthenticated={!!auth}>
+                                <AdminPage />
+                            </ProtectedRoute>
+                        }
+                    />
                 </Routes>
             </main>
+        </>
+    );
+}
+
+function App() {
+    const [auth, setAuth] = useState(() => getStoredAuth());
+
+    const handleLogin = (authPayload) => {
+        setStoredAuth(authPayload);
+        setAuth(authPayload);
+    };
+
+    const handleLogout = () => {
+        clearStoredAuth();
+        setAuth(null);
+    };
+
+    return (
+        <Router>
+            <Routes>
+                <Route
+                    path="/login"
+                    element={
+                        auth ? <Navigate to="/" replace /> : <LoginPage onLogin={handleLogin} />
+                    }
+                />
+                <Route path="/*" element={<AppShell auth={auth} onLogout={handleLogout} />} />
+            </Routes>
         </Router>
     );
 }
