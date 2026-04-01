@@ -10,7 +10,7 @@ body,
 
 body {
     margin: 0;
-    font-family: Arial, sans-serif;
+    font-family: Inter, sans-serif;
     background: #f3f3f3;
     color: #111111;
 }
@@ -55,13 +55,13 @@ select {
 
 .logo {
     font-size: 24px;
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: -0.02em;
     color: #4b2e83;
 }
 
 .logo span {
-    font-weight: 700;
+    font-weight: 500;
     margin-left: 4px;
     color: #00a9e0;
 }
@@ -76,7 +76,7 @@ select {
     text-decoration: none;
     color: #111111;
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .nav-link.active {
@@ -86,16 +86,17 @@ select {
 }
 
 .profile {
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
     border-radius: 50%;
-    background: #5f3b99;
-    color: white;
+    background: #12b7e6;
+    color: #111111;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 700;
-    margin-left: 16px;
+    font-weight: 500;
+    font-size: 16px;
+    margin-left: 18px;
 }
 
 .logout-btn {
@@ -106,7 +107,7 @@ select {
     font-weight: 600;
     background: #5f3b99;
     color: #ffffff;
-    display: none;
+    /* display: none; */
 }
 
 /* Login */
@@ -144,7 +145,7 @@ select {
 .login-title {
     font-size: 58px;
     line-height: 1.08;
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: -0.03em;
     color: #000000;
     margin: 0 0 40px;
@@ -162,7 +163,7 @@ select {
 .login-field label {
     display: block;
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 500;
     color: #111111;
     margin-bottom: 10px;
 }
@@ -226,7 +227,7 @@ select {
     background: #5f3b99;
     color: #ffffff;
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 500;
     cursor: pointer;
     margin-top: 2px;
 }
@@ -290,7 +291,7 @@ select {
 .tenant-card h3 {
     margin: 0 0 22px;
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .usage-card {
@@ -300,7 +301,7 @@ select {
 
 .usage-big-number {
     font-size: 38px;
-    font-weight: 700;
+    font-weight: 500;
     margin-top: 8px;
     margin-bottom: 12px;
     letter-spacing: 0.01em;
@@ -335,7 +336,7 @@ select {
     border-radius: 999px;
     background: #efc3bf;
     color: #111111;
-    font-weight: 700;
+    font-weight: 500;
     font-size: 14px;
     padding: 8px 12px;
 }
@@ -348,7 +349,7 @@ select {
 .usage-total-number {
     color: #6b7280;
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .dashboard-event-card {
@@ -359,7 +360,7 @@ select {
 
 .dashboard-form-label {
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 500;
     margin-top: 2px;
 }
 
@@ -403,7 +404,7 @@ select {
     background: #5f3b99;
     color: #ffffff;
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 500;
     cursor: pointer;
     margin-top: 6px;
 }
@@ -431,7 +432,7 @@ select {
 
 .usage-history-section h2 {
     font-size: 28px;
-    font-weight: 700;
+    font-weight: 500;
     margin: 0 0 26px;
 }
 
@@ -441,7 +442,7 @@ select {
 
 .usage-day-title {
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 500;
     margin-bottom: 8px;
 }
 
@@ -463,81 +464,139 @@ select {
 .usage-time-cell {
     width: 160px;
     color: #737373;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .usage-type-cell {
-    font-weight: 700;
+    font-weight: 500;
     color: #111111;
 }
 
 .usage-amount-cell {
     width: 140px;
     text-align: right;
-    font-weight: 700;
+    font-weight: 500;
     color: #111111;
 }
 
 /* Admin page */
 
 .admin-page {
-    background: #ffffff;
-    padding: 20px;
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    max-width: 1040px;
+    margin: 56px auto 0;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .admin-page-topbar {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
+}
+
+.admin-page-topbar h2 {
+    display: none;
 }
 
 .tenant-table {
     width: 100%;
     border-collapse: collapse;
-    margin-top: 16px;
-    background: #ffffff;
+    margin-top: 0;
+    background: transparent;
+}
+
+.tenant-table thead tr {
+    border-top: 1px solid #d4d4d4;
+    border-bottom: 1px solid #d4d4d4;
+}
+
+.tenant-table tbody tr {
+    border-bottom: 1px solid #d4d4d4;
 }
 
 .tenant-table th,
 .tenant-table td {
-    padding: 12px;
-    border-bottom: 1px solid #e5e7eb;
+    padding: 18px 12px;
+    border-bottom: none;
     text-align: left;
-    vertical-align: top;
+    vertical-align: middle;
 }
 
 .tenant-table th {
     font-size: 14px;
-    color: #374151;
-    background: #fafafa;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #7a7a7a;
+    background: transparent;
 }
 
-.audit-trail-block {
-    margin-top: 32px;
+.tenant-table td {
+    font-size: 18px;
+    font-weight: 500;
+    color: #111111;
+}
+
+.tenant-table tbody td:first-child {
+    color: #7b7b7b;
+    font-weight: 500;
+}
+
+.tenant-table tbody td:nth-child(2),
+.tenant-table tbody td:nth-child(3),
+.tenant-table tbody td:nth-child(4) {
+    color: #111111;
+}
+
+.tenant-table tbody td:last-child {
+    width: 110px;
+    text-align: right;
 }
 
 .edit-btn,
 .btn-discard,
 .btn-update {
     cursor: pointer;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-weight: 600;
+    border-radius: 10px;
+    padding: 9px 22px;
+    font-weight: 500;
+    font-size: 15px;
 }
 
-.edit-btn,
+.edit-btn {
+    background: transparent;
+    color: #5f3b99;
+    border: 1.5px solid #8f71c3;
+    min-width: 86px;
+}
+
+.edit-btn:hover {
+    background: rgba(95, 59, 153, 0.06);
+}
+
 .btn-update {
     background: #5f3b99;
     color: #ffffff;
+    border: none;
 }
 
 .btn-discard {
     background: #e5e7eb;
     color: #111827;
+    border: none;
+}
+
+.audit-trail-block {
+    margin-top: 48px;
+}
+
+.audit-trail-block h3 {
+    margin: 0 0 16px;
+    font-size: 22px;
+    font-weight: 500;
 }
 
 /* Modal */
@@ -603,6 +662,10 @@ small {
     .tenant-dashboard-top {
         grid-template-columns: 1fr;
     }
+
+    .admin-page {
+        max-width: 100%;
+    }
 }
 
 @media (max-width: 800px) {
@@ -654,5 +717,16 @@ small {
 
     .usage-amount-cell {
         width: 90px;
+    }
+
+    .tenant-table th,
+    .tenant-table td {
+        padding: 14px 8px;
+        font-size: 14px;
+    }
+
+    .edit-btn {
+        min-width: auto;
+        padding: 8px 14px;
     }
 }
