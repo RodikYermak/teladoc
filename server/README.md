@@ -1,4 +1,0 @@
-### BACKEND
-## PYTHON
-## FastAPI
-## Postgres
