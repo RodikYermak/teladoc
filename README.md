@@ -50,8 +50,8 @@ It supports:
 
 From the project root, run:
 
-```bash
-docker compose up --build
+
+```docker compose up --build```
 
 That starts:
 	•	frontend on http://localhost:5173
