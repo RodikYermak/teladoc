@@ -27,7 +27,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session, sess
 
 import time
 from sqlalchemy import text
-
+from contextlib import asynccontextmanager
 
 
 
@@ -255,19 +255,8 @@ FAKE_USERS = [
     },
 ]
 
-app = FastAPI(debug=True)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     last_error = None
 
     for attempt in range(15):
@@ -300,6 +289,18 @@ def startup():
                 db.add(TenantORM(tenant_id=tenant_id, configured_monthly_quota=quota))
 
         db.commit()
+
+    yield
+
+app = FastAPI(debug=True, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(RequestValidationError)
