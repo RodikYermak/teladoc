@@ -92,7 +92,7 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 from fastapi import FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 
@@ -136,7 +136,15 @@ class TenantsResponse(BaseModel):
 
 class QuotaUpdateRequest(BaseModel):
     new_monthly_quota: int = Field(gt=0)
-    reason: str = Field(min_length=3, max_length=200)
+    reason: str = Field(min_length=10, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        trimmed = value.strip()
+        if len(trimmed) < 10:
+            raise ValueError("reason must be at least 10 non-space characters")
+        return trimmed
 
 
 class QuotaUpdateResponse(BaseModel):
@@ -358,7 +366,6 @@ def create_usage_event(
 
     tenant = get_tenant_record(event.tenant_id)
 
-    # Quota enforcement only applies to token usage, since quota is token-based.
     if event.event_type == "tokens":
         month_to_date_usage = get_month_to_date_token_usage(event.tenant_id)
         projected_usage = month_to_date_usage + event.amount
