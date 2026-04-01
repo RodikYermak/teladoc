@@ -13,10 +13,10 @@ From the project root, run:
 
 ### Demo credentials
 
-admin / password123
-tenant1 / password123
-tenant2 / password123
-tenant3 / password123
+- admin / password123
+- tenant1 / password123
+- tenant2 / password123
+- tenant3 / password123
 
 ## Overview
 
