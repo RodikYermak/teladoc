@@ -73,7 +73,7 @@ function ProtectedRoute({ isAuthenticated, children }) {
     return children;
 }
 
-function Header({ auth, onLogout }) {
+export function Header({ auth, onLogout }) {
     const location = useLocation();
     const isAdmin = auth?.user?.role === 'admin';
 
@@ -225,7 +225,7 @@ function LoginPage({ onLogin }) {
     );
 }
 
-function TokenCard({ used, total }) {
+export function TokenCard({ used, total }) {
     const percentRaw = total > 0 ? (used / total) * 100 : 0;
     const percent = total > 0 ? Math.min(percentRaw, 100) : 0;
 
@@ -265,6 +265,8 @@ function TokenCard({ used, total }) {
         </div>
     );
 }
+
+/* rest of your file stays the same */
 
 function UsageByDayTable({ events }) {
     if (!events.length) {
