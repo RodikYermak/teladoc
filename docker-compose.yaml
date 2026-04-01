@@ -1,0 +1,46 @@
+services:
+    db:
+        image: postgres:15
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: teladoc
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - '5432:5432'
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U postgres -d teladoc']
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    web:
+        build: ./server
+        command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+        env_file:
+            - ./server/.env
+        ports:
+            - '8000:8000'
+        depends_on:
+            db:
+                condition: service_healthy
+        volumes:
+            - ./server:/app
+
+    frontend:
+        build: ./client
+        command: npm run dev -- --host 0.0.0.0 --port 5173
+        ports:
+            - '5173:5173'
+        depends_on:
+            - web
+        volumes:
+            - ./client:/app
+            - /app/node_modules
+        environment:
+            - VITE_API_BASE_URL=http://localhost:8000
+
+volumes:
+    postgres_data:
