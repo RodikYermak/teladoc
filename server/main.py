@@ -1,3 +1,23 @@
+# =========================
+# CURRENT FILE: main.py
+# PURPOSE OF THIS COMMENTED VERSION:
+# This file keeps the original monolith code unchanged, but adds comments showing
+# where each section should move during a future refactor.
+# =========================
+
+
+# =========================
+# IMPORTS
+# Future note: after refactoring, each module should only import what it needs.
+# For example:
+# - config.py imports os
+# - auth.py imports jwt, secrets
+# - database.py imports create_engine, sessionmaker
+# - models.py imports SQLAlchemy ORM classes
+# - schemas.py imports Pydantic classes
+# - routers import FastAPI router/dependency objects
+# =========================
+
 import hashlib
 import json
 import os
@@ -30,6 +50,12 @@ from sqlalchemy import text
 from contextlib import asynccontextmanager
 
 
+# =========================
+# MOVE TO: app/config.py
+# Reason: constants and environment settings should be centralized.
+# This makes configuration easier to manage and avoids hardcoding values inside main.py.
+# In production, JWT_SECRET should come from environment variables or a secrets manager.
+# =========================
 
 JWT_SECRET = "dev_only_super_secret_signing_key_change_me"
 JWT_ALGORITHM = "HS256"
@@ -46,8 +72,21 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg://postgres:postgres@db:5432/teladoc",
 )
 
+
+# =========================
+# MOVE TO: app/auth.py or app/dependencies.py
+# Reason: HTTPBearer security dependency is part of auth/dependency setup.
+# It is reused by protected routes.
+# =========================
+
 security = HTTPBearer(auto_error=False)
 
+
+# =========================
+# MOVE TO: app/models.py
+# Reason: SQLAlchemy ORM database models should be separated from API routes.
+# These classes define database tables, not request/response behavior.
+# =========================
 
 class Base(DeclarativeBase):
     pass
@@ -88,6 +127,12 @@ class AuditRecordORM(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+# =========================
+# MOVE TO: app/database.py
+# Reason: database engine, session factory, and DB dependency should live together.
+# This keeps database setup reusable across routers, services, tests, and startup logic.
+# =========================
+
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
@@ -99,6 +144,13 @@ def get_db():
     finally:
         db.close()
 
+
+# =========================
+# MOVE TO: app/schemas.py
+# Reason: Pydantic models are API contracts.
+# They define request bodies, response bodies, validation rules, and serialization behavior.
+# Keeping schemas separate makes the API easier to understand and test.
+# =========================
 
 class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -232,6 +284,13 @@ class AuthContext(StrictBaseModel):
     iss: str
 
 
+# =========================
+# MOVE TO: app/seed.py or app/dev_data.py
+# Reason: hardcoded tenants and fake users are development/test data.
+# In production, users should come from a real identity provider or database.
+# Seed tenants can be moved to migrations, startup seed logic, or test fixtures.
+# =========================
+
 TENANT_1 = UUID("550e8400-e29b-41d4-a716-446655440000")
 TENANT_2 = UUID("11111111-1111-1111-1111-111111111111")
 TENANT_3 = UUID("22222222-2222-2222-2222-222222222222")
@@ -271,6 +330,14 @@ FAKE_USERS = [
     },
 ]
 
+
+# =========================
+# MOVE TO: app/lifespan.py or app/startup.py
+# Reason: startup/lifespan logic should be separate from route definitions.
+# This section waits for DB readiness, creates tables, and seeds dev data.
+# In a more production-ready version, table creation would usually be handled by Alembic migrations.
+# =========================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     last_error = None
@@ -308,6 +375,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
+
+# =========================
+# STAYS IN: app/main.py
+# Reason: main.py should create the FastAPI app and wire the application together.
+# After refactoring, main.py should mainly contain:
+# - app = FastAPI(...)
+# - middleware registration
+# - exception handler registration
+# - router registration with app.include_router(...)
+# =========================
+
 app = FastAPI(debug=True, lifespan=lifespan)
 
 app.add_middleware(
@@ -318,6 +396,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# =========================
+# MOVE TO: app/errors.py
+# Reason: custom exception handlers should be separated from route/business logic.
+# These handlers standardize API error responses across the whole app.
+# In main.py, after refactor, you would register them during app setup.
+# =========================
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -369,6 +454,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
+# =========================
+# MOVE TO: app/errors.py
+# Reason: helper functions for standard 401/403 responses belong with error utilities.
+# These helpers keep auth-related error responses consistent.
+# =========================
+
 def unauthorized(message: str = "Authentication required") -> HTTPException:
     return HTTPException(
         status_code=401,
@@ -383,6 +474,12 @@ def forbidden(message: str = "You do not have permission to perform this action"
         detail={"code": "forbidden", "message": message},
     )
 
+
+# =========================
+# MOVE TO: app/services/auth_service.py
+# Reason: token creation and fake-user authentication are auth business logic.
+# Later, authenticate_user could be replaced with database lookup or external identity provider.
+# =========================
 
 def create_access_token(user: dict) -> tuple[str, datetime]:
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRES_MINUTES)
@@ -409,6 +506,12 @@ def authenticate_user(identifier: str, password: str) -> Optional[dict]:
             return user
     return None
 
+
+# =========================
+# MOVE TO: app/dependencies.py or app/auth.py
+# Reason: FastAPI dependency functions for authentication/authorization are reused by routers.
+# These should be imported by route modules instead of living inside main.py.
+# =========================
 
 def get_current_auth(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -462,6 +565,12 @@ def ensure_tenant_access(auth: AuthContext, tenant_id: UUID) -> None:
     raise forbidden("Tenant scope does not allow access to this tenant")
 
 
+# =========================
+# MOVE TO: app/services/tenant_service.py
+# Reason: tenant lookup is business/data-access logic.
+# Keeping this in a service makes it reusable across tenant, usage, and quota endpoints.
+# =========================
+
 def get_tenant_record(db: Session, tenant_id: UUID) -> TenantORM:
     tenant = db.get(TenantORM, str(tenant_id))
     if not tenant:
@@ -471,6 +580,12 @@ def get_tenant_record(db: Session, tenant_id: UUID) -> TenantORM:
         )
     return tenant
 
+
+# =========================
+# MOVE TO: app/utils/datetime.py
+# Reason: datetime parsing/normalization is reusable utility logic.
+# It is not specific to one route.
+# =========================
 
 def parse_iso_datetime(value: str, field_name: str) -> datetime:
     try:
@@ -492,6 +607,12 @@ def parse_iso_datetime(value: str, field_name: str) -> datetime:
     return parsed
 
 
+# =========================
+# MOVE TO: app/services/usage_service.py
+# Reason: payload hashing is part of idempotency logic for usage events.
+# This is business logic and should be tested independently from the route.
+# =========================
+
 def make_payload_hash(
     tenant_id: UUID,
     event_type: str,
@@ -507,6 +628,12 @@ def make_payload_hash(
     raw = json.dumps(normalized_payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
+
+# =========================
+# MOVE TO: app/services/health_service.py
+# Reason: DB readiness check is infrastructure/service logic.
+# The /ready route should call this service instead of implementing DB check directly.
+# =========================
 
 def check_db_connectivity() -> dict:
     started_at = time.perf_counter()
@@ -534,10 +661,23 @@ def check_db_connectivity() -> dict:
         }
 
 
+# =========================
+# MOVE TO: app/utils/datetime.py or app/services/usage_service.py
+# Reason: month boundary calculation supports quota/usage logic.
+# If only usage services need it, keep it inside usage_service.py.
+# If multiple features need it, move it to a datetime utility module.
+# =========================
+
 def get_month_start(dt: datetime) -> datetime:
     dt_utc = dt.astimezone(timezone.utc)
     return datetime(dt_utc.year, dt_utc.month, 1, tzinfo=timezone.utc)
 
+
+# =========================
+# MOVE TO: app/services/usage_service.py
+# Reason: month-to-date usage calculation is business/data-access logic.
+# This should be reusable by event creation and tenant summary endpoints.
+# =========================
 
 def get_month_to_date_token_usage(
     db: Session,
@@ -557,6 +697,12 @@ def get_month_to_date_token_usage(
     )
     return int(total or 0)
 
+
+# =========================
+# MOVE TO: app/services/usage_service.py
+# Reason: event timestamp rules are business validation rules for usage ingestion.
+# Keeping this separate makes it easier to test edge cases.
+# =========================
 
 def validate_event_timestamp(event_timestamp: datetime) -> None:
     now = datetime.now(timezone.utc)
@@ -586,6 +732,12 @@ def validate_event_timestamp(event_timestamp: datetime) -> None:
         )
 
 
+# =========================
+# MOVE TO: app/services/usage_service.py or app/mappers.py
+# Reason: converting ORM objects to API schemas is mapping logic.
+# This keeps routes cleaner and avoids repeating conversion code.
+# =========================
+
 def orm_event_to_api(event: EventORM, replayed: bool = False) -> Event:
     return Event(
         event_id=UUID(event.event_id),
@@ -597,6 +749,12 @@ def orm_event_to_api(event: EventORM, replayed: bool = False) -> Event:
         idempotency_replayed=replayed,
     )
 
+
+# =========================
+# MOVE TO: app/routers/auth.py
+# Reason: auth endpoints should be grouped in an auth router.
+# After refactoring, this would use APIRouter and be included in main.py.
+# =========================
 
 @app.post("/v1/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest):
@@ -619,6 +777,12 @@ def login(payload: LoginRequest):
         },
     )
 
+
+# =========================
+# MOVE TO: app/routers/health.py
+# Reason: health and readiness endpoints should be grouped together.
+# These are operational endpoints used by monitoring/orchestration systems.
+# =========================
 
 @app.get("/health")
 def health():
@@ -655,6 +819,12 @@ def ready():
 
     return payload
 
+
+# =========================
+# MOVE TO: app/routers/usage.py
+# Reason: usage event endpoints should be grouped in a usage router.
+# The router should be thin and delegate business rules to usage_service.py.
+# =========================
 
 @app.get("/v1/usage/events", response_model=EventsResponse)
 def list_usage_events(
@@ -757,6 +927,13 @@ def create_usage_event(
     return orm_event_to_api(new_event)
 
 
+# =========================
+# MOVE TO: app/routers/tenants.py
+# Reason: tenant-related endpoints should be grouped in a tenants router.
+# This includes listing tenants, updating quota, and reading tenant usage.
+# Some query logic could be pushed further into tenant_service.py or usage_service.py.
+# =========================
+
 @app.get("/v1/tenants", response_model=TenantsResponse)
 def list_tenants(
     auth: AuthContext = Depends(get_current_auth),
@@ -796,6 +973,12 @@ def list_tenants(
     return {"tenants": summaries}
 
 
+# =========================
+# MOVE TO: app/routers/tenants.py
+# Business logic inside this endpoint should later move to app/services/quota_service.py.
+# Reason: quota updates include domain rules and audit logging, so the route should be thin.
+# =========================
+
 @app.put("/v1/tenants/{tenant_id}/quota", response_model=QuotaUpdateResponse)
 def update_tenant_quota(
     tenant_id: UUID,
@@ -830,6 +1013,12 @@ def update_tenant_quota(
     )
 
 
+# =========================
+# MOVE TO: app/routers/audit.py
+# Reason: audit log endpoints should be isolated in their own audit router.
+# This keeps admin/audit concerns separate from usage and tenant routes.
+# =========================
+
 @app.get("/v1/audit", response_model=AuditResponse)
 def list_audit_logs(
     auth: AuthContext = Depends(get_current_auth),
@@ -857,6 +1046,12 @@ def list_audit_logs(
         ]
     }
 
+
+# =========================
+# MOVE TO: app/routers/tenants.py
+# Business logic inside this endpoint should later move to app/services/usage_service.py.
+# Reason: daily usage aggregation is domain logic and can be tested separately from FastAPI.
+# =========================
 
 @app.get("/v1/tenants/{tenant_id}/usage", response_model=TenantUsageResponse)
 def get_tenant_usage(
@@ -936,6 +1131,13 @@ def get_tenant_usage(
         buckets=buckets,
     )
 
+
+# =========================
+# STAYS IN: app/main.py for local development only
+# Reason: this is the local dev entrypoint.
+# In production, the app is usually started from Docker/CLI with something like:
+# uvicorn app.main:app --host 0.0.0.0 --port 8000
+# =========================
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
