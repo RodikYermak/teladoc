@@ -12,7 +12,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 os.environ["DATABASE_URL"] = "postgresql+psycopg://postgres:postgres@localhost:5433/teladoc_test"
 
-from main import app, Base, get_db, TenantORM, TENANT_1, TENANT_2, TENANT_3  # noqa
+from main import app  # noqa
+from models import Base, TenantORM  # noqa
+from database import get_db  # noqa
+from dev_data import TENANT_1, TENANT_2, TENANT_3  # noqa
 
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from main import TENANT_1
+from dev_data import TENANT_1
 
 
 def login(client, identifier="admin", password="password123"):
