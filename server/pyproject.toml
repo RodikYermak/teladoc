@@ -1,0 +1,21 @@
+[project]
+name = "teladoc-usage-api"
+version = "0.1.0"
+description = "Refactored FastAPI usage API server"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi==0.135.2",
+    "httpx==0.28.1",
+    "psycopg==3.3.3",
+    "psycopg-binary==3.3.3",
+    "pydantic==2.12.5",
+    "PyJWT==2.12.1",
+    "pytest==9.0.2",
+    "SQLAlchemy==2.0.48",
+    "uvicorn==0.42.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]

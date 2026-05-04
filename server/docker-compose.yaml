@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: teladoc
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  test-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: teladoc_test
+    ports:
+      - "5433:5432"
+
+  web:
+    build: .
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/teladoc
+      JWT_SECRET: dev_only_super_secret_signing_key_change_me
+      JWT_ALGORITHM: HS256
+      JWT_ISSUER: teladoc-fake-issuer
+      JWT_EXPIRES_MINUTES: 60
+
+volumes:
+  postgres_data:
